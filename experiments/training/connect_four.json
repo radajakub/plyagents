@@ -1,0 +1,10 @@
+{
+  "games": [ { "value": "connect_four:", "enabled": true } ],
+  "players": [
+    { "value": "reasoning_bank:actions:text:gemini:gemini-3.8-flash:thinking_enabled=True,reasoning_effort=high,memory=on,top_n=1", "enabled": true }
+  ],
+  "trainers": [ { "value": "mcts:max_simulations=5000,rollout_count=1,uct_c=1.41", "enabled": true } ],
+  "testers": [ { "value": "mcts:max_simulations=5000,rollout_count=1,uct_c=1.41", "enabled": true } ],
+  "training_configs": [ { "value": "num_epochs=5,num_training_games=20,num_test_games=50", "enabled": true } ],
+  "num_replicates": 1
+}
