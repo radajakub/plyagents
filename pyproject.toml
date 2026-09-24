@@ -1,9 +1,17 @@
 [project]
-name = "game-agents"
+name = "plyagents"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "plybench[all]>=2.0.0",
+    "plybench[all]>=4,<5",
+    "plyllm[all]>=1.4.1,<2",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.16.0",
+    "pyright>=1.1.414",
 ]

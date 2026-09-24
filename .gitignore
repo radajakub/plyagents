@@ -216,3 +216,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# experiments, results, analysis, cache and plots are symlinks into ../plydata (no trailing slash: git
+# treats a symlink as a file); what is versioned there is decided by plydata's .gitignore
+/experiments
+/results
+/analysis
+/cache
+/plots
