@@ -33,3 +33,6 @@ class UCB(Selector):
             return int(rng.choice(untried))
         total = sum(counts)
         return argmax([value + self.c * math.sqrt(math.log(total) / count) for value, count in zip(values, counts)], rng)
+
+    def describe(self) -> str:
+        return f"untried actions first, then estimate + {self.c} * sqrt(ln N / n)"

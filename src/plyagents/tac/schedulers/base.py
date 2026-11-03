@@ -8,3 +8,8 @@ class Scheduler(ABC):
     @abstractmethod
     def step_size(self, count: int) -> float:
         raise NotImplementedError
+
+    # one line for the debug summary printed when the player is built
+    @abstractmethod
+    def describe(self) -> str:
+        raise NotImplementedError

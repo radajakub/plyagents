@@ -46,3 +46,6 @@ class TabularCritic(Critic):
 
     def load_state(self, state: dict[str, Any] | None) -> None:
         self.table = Table.from_dict(state or {})
+
+    def describe(self) -> str:
+        return f"Monte Carlo V(z) toward G, {self.scheduler.describe()}"

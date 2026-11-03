@@ -31,3 +31,6 @@ class ResultShaper(RewardShaper):
 
     def outcome(self, result: GameResults, steps: list[TACStep]) -> float:
         return self.values[result]
+
+    def describe(self) -> str:
+        return f"win +1, draw 0, loss -1, own fail {self.values[GameResults.MY_FAIL]:+g}, opponent fail {self.values[GameResults.OPPONENT_FAIL]:+g}"

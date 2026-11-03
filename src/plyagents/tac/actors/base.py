@@ -23,6 +23,11 @@ class Actor(ABC):
     async def act(self, situation: Situation, selector: Selector, rng: np.random.Generator) -> PlayerOutput:
         raise NotImplementedError
 
+    # one line for the debug summary printed when the player is built
+    @abstractmethod
+    def describe(self) -> str:
+        raise NotImplementedError
+
     def propose(self, steps: list[TACStep], assessments: list[Assessment], outcome: float) -> TableUpdate | None:
         return None
 

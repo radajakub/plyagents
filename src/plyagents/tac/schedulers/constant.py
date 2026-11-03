@@ -23,3 +23,6 @@ class ConstantScheduler(Scheduler):
 
     def step_size(self, count: int) -> float:
         return self.beta
+
+    def describe(self) -> str:
+        return f"constant step {self.beta}"

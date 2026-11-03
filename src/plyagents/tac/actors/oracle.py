@@ -27,3 +27,6 @@ class OracleActor(Actor):
         values = [avq.Q(action.number) for action in situation.legal]
         # the oracle knows every value, so every action counts as tried
         return PlayerOutput(action=situation.legal[selector.select(values, [1] * len(values), rng)])
+
+    def describe(self) -> str:
+        return "Q*(s, a) of the solved game through the selector (privileged: reads the true state)"

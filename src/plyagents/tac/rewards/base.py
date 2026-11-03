@@ -12,3 +12,8 @@ class RewardShaper(ABC):
     @abstractmethod
     def outcome(self, result: GameResults, steps: list[TACStep]) -> float:
         raise NotImplementedError
+
+    # one line for the debug summary printed when the player is built
+    @abstractmethod
+    def describe(self) -> str:
+        raise NotImplementedError

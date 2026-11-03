@@ -9,3 +9,6 @@ class NoCritic(Critic):
     # feedback in hindsight: no value, the outcome alone
     def assess(self, steps: list[TACStep]) -> list[Assessment]:
         return [Assessment(None, "") for _ in steps]
+
+    def describe(self) -> str:
+        return "no value: the feedback sees the outcome only"

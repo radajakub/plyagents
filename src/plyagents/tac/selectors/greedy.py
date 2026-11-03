@@ -11,3 +11,6 @@ from plyagents.tac.utils.selection import argmax
 class Greedy(Selector):
     def select(self, values: Sequence[float], counts: Sequence[int], rng: np.random.Generator) -> int:
         return argmax(values, rng)
+
+    def describe(self) -> str:
+        return "the action with the best estimate, ties at random"

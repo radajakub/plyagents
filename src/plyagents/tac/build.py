@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from plybench.common.enums import Mode
 from plybench.configs.player_config import PlayerConfig
 from plybench.player.player import PlayerIdentifier
 
@@ -11,6 +12,9 @@ from plyagents.tac.params import TACParams
 from plyagents.tac.player import TACPlayer
 from plyagents.tac.rewards.build import REWARDS
 from plyagents.tac.selectors.build import SELECTORS
+
+# the configs already described by this process (see build_tac_player)
+_ANNOUNCED: set[str] = set()
 
 
 def build_tac_player(player_config: PlayerConfig, identifier: PlayerIdentifier) -> TACPlayer:
@@ -26,7 +30,7 @@ def build_tac_player(player_config: PlayerConfig, identifier: PlayerIdentifier) 
     if isinstance(actor, TabularActorParams) and actor.target.kind is TargetType.CRITIC and params.critic.kind is CriticType.NONE:
         raise ValueError("target=critic needs a critic that gives values (critic=oracle or critic=tabular)")
 
-    return TACPlayer(
+    player = TACPlayer(
         player_config,
         identifier,
         ACTORS.build(params.actor),
@@ -36,3 +40,23 @@ def build_tac_player(player_config: PlayerConfig, identifier: PlayerIdentifier) 
         SELECTORS.build(params.eval_selector),
         params.key,
     )
+
+    if params.debug and player_config.to_string() not in _ANNOUNCED:
+        # plybench builds a player for every evaluation game, so each config is described once per process
+        _ANNOUNCED.add(player_config.to_string())
+        print(describe_tac_player(player, params))
+
+    return player
+
+
+def describe_tac_player(player: TACPlayer, params: TACParams) -> str:
+    rows = [
+        ("actor", params.actor.to_string(), player.actor.describe()),
+        ("critic", params.critic.to_string(), player.critic.describe()),
+        ("train selector", params.train_selector.to_string(), player.selectors[Mode.TRAIN].describe()),
+        ("eval selector", params.eval_selector.to_string(), player.selectors[Mode.EVAL].describe()),
+        ("reward", params.reward.to_string(), player.shaper.describe()),
+        ("key", params.key.value, "the observation text in this formalism, for retrieval only"),
+    ]
+    width = max(len(role) for role, _, _ in rows)
+    return "\n".join([f"TAC player {player}", *(f"  {role:<{width}}  {config}: {summary}" for role, config, summary in rows)])

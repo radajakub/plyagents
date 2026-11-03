@@ -13,6 +13,7 @@ from plybench.core.minimax import AVQCache, load_or_solve
 from plybench.harness.training.training import TrainingHarness
 from plyllm import LLMConfig
 
+from plyagents.tac import build
 from plyagents.tac.critics.oracle import OracleCritic
 from plyagents.tac.model.step import TACStep
 from plyagents.tac.player import TACPlayer
@@ -63,6 +64,24 @@ def _outputs(harness: TrainingHarness) -> tuple[dict, list[dict]]:
 
 def test_the_tac_player_is_registered_through_the_entry_point():
     assert "tac" in registry.player_keys()
+
+
+def test_debug_describes_each_component_once_per_config(monkeypatch, capsys):
+    monkeypatch.setattr(build, "_ANNOUNCED", set())
+    config = registry.player_config("tac:actor=tabular[target=critic],critic=tabular,train_selector=eps_greedy[eps=0.2],debug=true")
+    for _ in range(3):
+        registry.build_player(_game(), config, "i")
+
+    printed = capsys.readouterr().out
+    assert printed.count("TAC player") == 1
+    for line in ("tabular[target=critic]: Q(z, a) toward y_t = v_{t+1}", "eps_greedy[eps=0.2]: a random action with probability 0.2", "eval selector", "reward", "key"):
+        assert line in printed
+
+
+def test_without_debug_nothing_is_printed(monkeypatch, capsys):
+    monkeypatch.setattr(build, "_ANNOUNCED", set())
+    registry.build_player(_game(), registry.player_config(TABULAR), "i")
+    assert capsys.readouterr().out == ""
 
 
 def test_a_critic_target_without_a_critic_is_refused_when_the_player_is_built():

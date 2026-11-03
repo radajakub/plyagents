@@ -45,3 +45,11 @@ def test_params_refuse_unknown_options_and_types_and_a_missing_actor():
         TACParams.from_string("actor=tabular,key=pixels")
     with pytest.raises(ValueError, match="actor"):
         TACParams.from_string("critic=oracle")
+
+
+def test_debug_is_read_but_stays_out_of_the_identity():
+    params = TACParams.from_string("actor=tabular,debug=true")
+    assert params.debug
+    assert params.to_string() == "actor=tabular"
+    assert params == TACParams.from_string("actor=tabular")
+    assert params.path_suffix == TACParams.from_string("actor=tabular").path_suffix

@@ -28,3 +28,6 @@ class LengthPenaltyShaper(ResultShaper):
 
     def outcome(self, result: GameResults, steps: list[TACStep]) -> float:
         return super().outcome(result, steps) - self.penalty * len(steps)
+
+    def describe(self) -> str:
+        return f"{super().describe()}, minus {self.penalty} per own move"

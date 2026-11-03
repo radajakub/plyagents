@@ -13,3 +13,6 @@ class CriticTarget(Target):
         if any(value is None for value in values):
             raise ValueError("target=critic needs a critic that gives values (oracle or tabular)")
         return [float(value) for value in values if value is not None] + [outcome]
+
+    def describe(self) -> str:
+        return "y_t = v_{t+1}, the critic's value of the next own state, G after the last move"

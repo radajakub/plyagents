@@ -27,3 +27,6 @@ class EpsGreedy(Selector):
 
     def select(self, values: Sequence[float], counts: Sequence[int], rng: np.random.Generator) -> int:
         return int(rng.integers(len(values))) if rng.random() < self.eps else argmax(values, rng)
+
+    def describe(self) -> str:
+        return f"a random action with probability {self.eps}, else the best estimate"

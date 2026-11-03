@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from plybench.common.enums import ObservationType
 from plybench.configs.player_params import CheckpointedParams
+from plybench.utils.text import to_bool
 
 from plyagents.tac.actors.build import ACTORS
 from plyagents.tac.configs.components import ComponentConfig
@@ -14,7 +15,7 @@ from plyagents.tac.rewards.build import REWARDS
 from plyagents.tac.selectors.build import SELECTORS
 from plyagents.tac.utils.options import read_options
 
-_OPTIONS = {"actor", "critic", "train_selector", "eval_selector", "reward", "key", "checkpoint"}
+_OPTIONS = {"actor", "critic", "train_selector", "eval_selector", "reward", "key", "checkpoint", "debug"}
 
 
 @dataclass(frozen=True, eq=True)
@@ -28,6 +29,9 @@ class TACParams(CheckpointedParams):
     # the observation type the key is computed in; only for retrieval, independent of what an LLM is shown
     key: ObservationType = ObservationType.ACTIONS
     checkpoint_path: Path | None = None
+    # prints the components when the player is built; not part of the player's identity, so it stays out of the string, the
+    # path and equality, and a run with it lands on the same records as one without
+    debug: bool = field(default=False, compare=False)
 
     @classmethod
     def from_string(cls, params_string: str) -> TACParams:
@@ -47,6 +51,7 @@ class TACParams(CheckpointedParams):
             REWARDS.config(options["reward"]) if "reward" in options else cls.reward,
             key,
             Path(checkpoint) if checkpoint else None,
+            to_bool(options.get("debug", False)),
         )
 
     def _options(self) -> list[tuple[str, ComponentConfig | ObservationType]]:

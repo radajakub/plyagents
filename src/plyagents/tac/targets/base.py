@@ -10,3 +10,8 @@ class Target(ABC):
     @abstractmethod
     def targets(self, assessments: list[Assessment], outcome: float) -> list[float]:
         raise NotImplementedError
+
+    # one line for the debug summary printed when the player is built
+    @abstractmethod
+    def describe(self) -> str:
+        raise NotImplementedError

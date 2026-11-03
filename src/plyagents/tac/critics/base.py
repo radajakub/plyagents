@@ -19,6 +19,11 @@ class Critic(ABC):
     def assess(self, steps: list[TACStep]) -> list[Assessment]:
         raise NotImplementedError
 
+    # one line for the debug summary printed when the player is built
+    @abstractmethod
+    def describe(self) -> str:
+        raise NotImplementedError
+
     def propose(self, steps: list[TACStep], outcome: float) -> TableUpdate | None:
         return None
 

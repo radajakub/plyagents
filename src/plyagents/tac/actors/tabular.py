@@ -60,3 +60,6 @@ class TabularActor(Actor):
 
     def load_state(self, state: dict[str, Any] | None) -> None:
         self.tables = {key: Table.from_dict(table) for key, table in (state or {}).items()}
+
+    def describe(self) -> str:
+        return f"Q(z, a) toward {self.target.describe()}; {self.scheduler.describe()}"

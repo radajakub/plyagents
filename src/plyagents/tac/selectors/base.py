@@ -11,3 +11,8 @@ class Selector(ABC):
     @abstractmethod
     def select(self, values: Sequence[float], counts: Sequence[int], rng: np.random.Generator) -> int:
         raise NotImplementedError
+
+    # one line for the debug summary printed when the player is built
+    @abstractmethod
+    def describe(self) -> str:
+        raise NotImplementedError

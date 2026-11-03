@@ -27,3 +27,6 @@ class OracleCritic(Critic):
     def assess(self, steps: list[TACStep]) -> list[Assessment]:
         values = [self._value(step) for step in steps]
         return [Assessment(value, f"value {value:+g}") for value in values]
+
+    def describe(self) -> str:
+        return "V*(s) of the solved game (privileged: reads the true state)"
