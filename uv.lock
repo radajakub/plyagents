@@ -1579,7 +1579,7 @@ wheels = [
 [[package]]
 name = "plyagents"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "plybench", extra = ["all"] },
     { name = "plyllm", extra = ["all"] },
@@ -1595,7 +1595,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "plybench", extras = ["all"], specifier = ">=4.2.1,<5" },
-    { name = "plyllm", extras = ["all"], specifier = ">=1.4.1,<2" },
+    { name = "plyllm", extras = ["all"], specifier = ">=1.5.0,<2" },
 ]
 
 [package.metadata.requires-dev]
