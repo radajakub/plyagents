@@ -33,3 +33,4 @@ class SchedulerType(ExtendedEnum):
 
 class RewardType(ExtendedEnum):
     RESULT = "result"
+    LENGTH_PENALTY = "length_penalty"
