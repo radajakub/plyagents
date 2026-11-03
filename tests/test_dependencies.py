@@ -1,5 +1,4 @@
-"""plyagents has no code of its own yet; this keeps `make test` meaningful for the dependency bumps in the release
-chain: the pinned plybench and plyllm install and import together."""
+"""The pinned plybench and plyllm install and import together, which the dependency bumps in the release chain rely on."""
 
 from importlib.metadata import version
 
