@@ -9,7 +9,7 @@ import pytest
 from plyagents.tac.actors.tabular import TabularActorParams
 from plyagents.tac.configs.components import ComponentConfig
 from plyagents.tac.enums import CriticType, SchedulerType, SelectorType, TargetType
-from plyagents.tac.params import TACParams
+from plyagents.tac.params import HASH_LENGTH, MAX_SUFFIX, TACParams
 from plyagents.tac.schedulers.constant import ConstantParams
 
 
@@ -53,3 +53,17 @@ def test_debug_is_read_but_stays_out_of_the_identity():
     assert params.to_string() == "actor=tabular"
     assert params == TACParams.from_string("actor=tabular")
     assert params.path_suffix == TACParams.from_string("actor=tabular").path_suffix
+
+
+def test_a_long_suffix_keeps_its_start_and_a_hash_of_the_whole():
+    model = "vllm:qwen-3.8-27b-fp8[thinking_enabled=True,reasoning_effort=low]"
+    text = f"actor=llm[model={model},budget=600,apply=compress[model={model}]],critic=oracle,feedback=llm[model={model},lesson_chars=200]"
+    params = TACParams.from_string(text)
+    suffix = params.path_suffix
+    assert len(suffix) == MAX_SUFFIX and suffix.startswith("actor-llm-model-vllm_qwen-3-8-27b-fp8")
+    assert not any(char in suffix for char in "=,[]")
+    # another long spec that shares the start gets another hash
+    other = TACParams.from_string(text.replace("lesson_chars=200", "lesson_chars=300")).path_suffix
+    assert other[:-HASH_LENGTH] == suffix[:-HASH_LENGTH] and other != suffix
+    # a short one is kept whole
+    assert TACParams.from_string("actor=tabular").path_suffix == "actor-tabular"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -15,6 +16,10 @@ from plyagents.tac.feedback.build import FEEDBACKS
 from plyagents.tac.rewards.build import REWARDS
 from plyagents.tac.selectors.build import SELECTORS
 from plyagents.tac.utils.options import read_options
+
+# the longest path suffix kept whole, leaving room in plybench's 255-byte directory name for "tac_" and "_vs_<trainer>"
+MAX_SUFFIX = 160
+HASH_LENGTH = 12
 
 _OPTIONS = {"actor", "critic", "feedback", "train_selector", "eval_selector", "reward", "key", "checkpoint", "debug"}
 
@@ -79,8 +84,13 @@ class TACParams(CheckpointedParams):
 
     @property
     def path_suffix(self) -> str:
-        # no "=", "," or brackets: the checkpoint path is built from this suffix and read back by from_string
-        return "_".join(f"{name}-{value.path_suffix if isinstance(value, ComponentConfig) else value.value}" for name, value in self._options())
+        # no "=", "," or brackets: the checkpoint path is built from this suffix and read back by from_string. plybench names a
+        # directory <player>_vs_<trainer>, at most 255 bytes, so a longer suffix keeps its readable start and a hash of the whole
+        # (run.json and metadata.json hold the full spec)
+        suffix = "_".join(f"{name}-{value.path_suffix if isinstance(value, ComponentConfig) else value.value}" for name, value in self._options())
+        if len(suffix) <= MAX_SUFFIX:
+            return suffix
+        return f"{suffix[: MAX_SUFFIX - HASH_LENGTH - 1]}-{hashlib.sha256(suffix.encode()).hexdigest()[:HASH_LENGTH]}"
 
     @property
     def checkpoint(self) -> Path | None:
