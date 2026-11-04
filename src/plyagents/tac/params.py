@@ -10,12 +10,13 @@ from plybench.utils.text import to_bool
 from plyagents.tac.actors.build import ACTORS
 from plyagents.tac.configs.components import ComponentConfig
 from plyagents.tac.critics.build import CRITICS
-from plyagents.tac.enums import ActorType, CriticType, RewardType, SelectorType
+from plyagents.tac.enums import ActorType, CriticType, FeedbackType, RewardType, SelectorType
+from plyagents.tac.feedback.build import FEEDBACKS
 from plyagents.tac.rewards.build import REWARDS
 from plyagents.tac.selectors.build import SELECTORS
 from plyagents.tac.utils.options import read_options
 
-_OPTIONS = {"actor", "critic", "train_selector", "eval_selector", "reward", "key", "checkpoint", "debug"}
+_OPTIONS = {"actor", "critic", "feedback", "train_selector", "eval_selector", "reward", "key", "checkpoint", "debug"}
 
 
 @dataclass(frozen=True, eq=True)
@@ -23,6 +24,7 @@ class TACParams(CheckpointedParams):
     # the TAC composed of one config per role; actor has no default, so every spec and path names it
     actor: ComponentConfig[ActorType]
     critic: ComponentConfig[CriticType] = CRITICS.default(CriticType.NONE)
+    feedback: ComponentConfig[FeedbackType] = FEEDBACKS.default(FeedbackType.NONE)
     train_selector: ComponentConfig[SelectorType] = SELECTORS.default(SelectorType.GREEDY)
     eval_selector: ComponentConfig[SelectorType] = SELECTORS.default(SelectorType.GREEDY)
     reward: ComponentConfig[RewardType] = REWARDS.default(RewardType.RESULT)
@@ -35,7 +37,7 @@ class TACParams(CheckpointedParams):
 
     @classmethod
     def from_string(cls, params_string: str) -> TACParams:
-        # format: actor=tabular[target=critic],critic=tabular,train_selector=eps_greedy[eps=0.2],... (later an LLM part before a "|")
+        # format: actor=tabular[target=critic],critic=tabular,train_selector=eps_greedy[eps=0.2],...; an LLM component names its own model
         options = read_options(params_string, _OPTIONS, "TAC params")
         if "actor" not in options:
             raise ValueError(f"TAC params need an actor: {params_string!r}")
@@ -46,6 +48,7 @@ class TACParams(CheckpointedParams):
         return cls(
             ACTORS.config(options["actor"]),
             CRITICS.config(options["critic"]) if "critic" in options else cls.critic,
+            FEEDBACKS.config(options["feedback"]) if "feedback" in options else cls.feedback,
             SELECTORS.config(options["train_selector"]) if "train_selector" in options else cls.train_selector,
             SELECTORS.config(options["eval_selector"]) if "eval_selector" in options else cls.eval_selector,
             REWARDS.config(options["reward"]) if "reward" in options else cls.reward,
@@ -60,6 +63,7 @@ class TACParams(CheckpointedParams):
         roles: list[tuple[str, ComponentConfig | ObservationType]] = [
             ("actor", self.actor),
             ("critic", self.critic),
+            ("feedback", self.feedback),
             ("train_selector", self.train_selector),
             ("eval_selector", self.eval_selector),
             ("reward", self.reward),

@@ -41,13 +41,13 @@ def test_the_same_seed_gives_the_same_choices():
     assert picks[0] == picks[1]
 
 
-def test_the_collection_builds_each_selector_from_its_config():
+def test_the_collection_builds_each_selector_from_its_config(services):
     config = SELECTORS.config("eps_greedy[eps=0.2]")
     assert config == ComponentConfig(SelectorType.EPS_GREEDY, EpsGreedyParams(eps=0.2))
-    selector = SELECTORS.build(config)
+    selector = SELECTORS.build(config, services)
     assert isinstance(selector, EpsGreedy) and selector.eps == 0.2
-    assert isinstance(SELECTORS.build(SELECTORS.config("greedy")), Greedy)
-    ucb = SELECTORS.build(SELECTORS.config("ucb[c=2.0]"))
+    assert isinstance(SELECTORS.build(SELECTORS.config("greedy"), services), Greedy)
+    ucb = SELECTORS.build(SELECTORS.config("ucb[c=2.0]"), services)
     assert isinstance(ucb, UCB) and ucb.c == 2.0
     with pytest.raises(ValueError, match="Invalid selector"):
         SELECTORS.config("softmax")

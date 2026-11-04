@@ -12,8 +12,8 @@ CRITICS: Collection[CriticType, Critic] = Collection(
     "critic",
     CriticType,
     {
-        CriticType.NONE: ComponentSpec(NoParams, lambda params: NoCritic()),
-        CriticType.ORACLE: ComponentSpec(NoParams, lambda params: OracleCritic()),
-        CriticType.TABULAR: ComponentSpec(TabularCriticParams, lambda params: TabularCritic(SCHEDULERS.build(params.scheduler))),
+        CriticType.NONE: ComponentSpec(NoParams, lambda params, services: NoCritic()),
+        CriticType.ORACLE: ComponentSpec(NoParams, lambda params, services: OracleCritic()),
+        CriticType.TABULAR: ComponentSpec(TabularCriticParams, lambda params, services: TabularCritic(SCHEDULERS.build(params.scheduler, services))),
     },
 )

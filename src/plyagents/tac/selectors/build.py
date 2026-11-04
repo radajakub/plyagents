@@ -11,8 +11,8 @@ SELECTORS: Collection[SelectorType, Selector] = Collection(
     "selector",
     SelectorType,
     {
-        SelectorType.GREEDY: ComponentSpec(NoParams, lambda params: Greedy()),
-        SelectorType.EPS_GREEDY: ComponentSpec(EpsGreedyParams, lambda params: EpsGreedy(params.eps)),
-        SelectorType.UCB: ComponentSpec(UCBParams, lambda params: UCB(params.c)),
+        SelectorType.GREEDY: ComponentSpec(NoParams, lambda params, services: Greedy()),
+        SelectorType.EPS_GREEDY: ComponentSpec(EpsGreedyParams, lambda params, services: EpsGreedy(params.eps)),
+        SelectorType.UCB: ComponentSpec(UCBParams, lambda params, services: UCB(params.c)),
     },
 )

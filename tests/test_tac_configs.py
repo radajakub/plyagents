@@ -31,7 +31,7 @@ class _TunedParams(ComponentParams):
 _COLLECTION: Collection[_Kind, str] = Collection(
     "thing",
     _Kind,
-    {_Kind.PLAIN: ComponentSpec(NoParams, lambda params: "plain"), _Kind.TUNED: ComponentSpec(_TunedParams, lambda params: f"tuned {params.rate}")},
+    {_Kind.PLAIN: ComponentSpec(NoParams, lambda params, services: "plain"), _Kind.TUNED: ComponentSpec(_TunedParams, lambda params, services: f"tuned {params.rate}")},
 )
 
 
@@ -45,9 +45,9 @@ def test_a_config_round_trips_and_writes_only_what_differs_from_the_defaults():
     assert _COLLECTION.default(_Kind.TUNED).to_string() == "tuned"
 
 
-def test_a_collection_builds_the_component_of_a_config():
-    assert _COLLECTION.build(_COLLECTION.config("plain")) == "plain"
-    assert _COLLECTION.build(_COLLECTION.config("tuned[rate=0.3]")) == "tuned 0.3"
+def test_a_collection_builds_the_component_of_a_config(services):
+    assert _COLLECTION.build(_COLLECTION.config("plain"), services) == "plain"
+    assert _COLLECTION.build(_COLLECTION.config("tuned[rate=0.3]"), services) == "tuned 0.3"
 
 
 def test_a_collection_refuses_unknown_types_and_params():

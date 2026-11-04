@@ -3,20 +3,22 @@ from __future__ import annotations
 import numpy as np
 from plybench.core.game import TurnBasedGame
 from plybench.core.minimax import AVQCache, load_or_solve
+from plybench.core.prompt_adapter import PromptAdapter
 from plybench.player.player import PlayerOutput
 
 from plyagents.tac.actors.base import Actor
 from plyagents.tac.model.step import Situation
+from plyagents.tac.model.update import ComponentUpdate
 from plyagents.tac.selectors.base import Selector
 
 
-class OracleActor(Actor):
+class OracleActor(Actor[ComponentUpdate]):
     # the solved policy as a component: Q*(s, .) through the selector (greedy plays like optimal:stochastic=True).
     # Privileged: it reads the true state
     def __init__(self) -> None:
         self._cache: AVQCache | None = None
 
-    def initialize(self, game: TurnBasedGame) -> None:
+    def initialize(self, game: TurnBasedGame, adapter_template: PromptAdapter) -> None:
         self._cache = load_or_solve(game)
 
     async def act(self, situation: Situation, selector: Selector, rng: np.random.Generator) -> PlayerOutput:

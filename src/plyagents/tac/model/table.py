@@ -4,6 +4,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from plyagents.tac.model.update import ComponentUpdate
+
 
 @dataclass
 class Estimate:
@@ -42,7 +44,7 @@ class Sample:
 
 
 @dataclass(frozen=True)
-class TableUpdate:
+class TableUpdate(ComponentUpdate):
     # the samples of one game in step order; commit applies them in this order
     samples: tuple[Sample, ...]
 

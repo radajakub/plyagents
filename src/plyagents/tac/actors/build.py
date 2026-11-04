@@ -12,7 +12,9 @@ ACTORS: Collection[ActorType, Actor] = Collection(
     "actor",
     ActorType,
     {
-        ActorType.ORACLE: ComponentSpec(NoParams, lambda params: OracleActor()),
-        ActorType.TABULAR: ComponentSpec(TabularActorParams, lambda params: TabularActor(TARGETS.build(params.target), SCHEDULERS.build(params.scheduler))),
+        ActorType.ORACLE: ComponentSpec(NoParams, lambda params, services: OracleActor()),
+        ActorType.TABULAR: ComponentSpec(
+            TabularActorParams, lambda params, services: TabularActor(TARGETS.build(params.target, services), SCHEDULERS.build(params.scheduler, services))
+        ),
     },
 )

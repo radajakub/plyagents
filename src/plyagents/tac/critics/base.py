@@ -4,19 +4,23 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from plybench.core.game import TurnBasedGame
+from plybench.core.prompt_adapter import PromptAdapter
 
 from plyagents.tac.model.assessment import Assessment
+from plyagents.tac.model.feedback import StepFeedback
 from plyagents.tac.model.step import TACStep
-from plyagents.tac.model.table import TableUpdate
+from plyagents.tac.model.update import ComponentUpdate
+from plyagents.tac.utils.calls import Calls
 
 
-class Critic(ABC):
-    # estimates V(s) of the visited states; a critic that learns overrides propose, commit, state and load_state
-    def initialize(self, game: TurnBasedGame) -> None:
+class Critic[U: ComponentUpdate](ABC):
+    # estimates V(s) of the visited states; a critic that learns overrides propose, commit, parse_update, state and load_state,
+    # U being what one game teaches it
+    def initialize(self, game: TurnBasedGame, adapter_template: PromptAdapter) -> None:
         pass
 
     @abstractmethod
-    def assess(self, steps: list[TACStep]) -> list[Assessment]:
+    async def assess(self, steps: list[TACStep], calls: Calls) -> list[Assessment]:
         raise NotImplementedError
 
     # one line for the debug summary printed when the player is built
@@ -24,11 +28,14 @@ class Critic(ABC):
     def describe(self) -> str:
         raise NotImplementedError
 
-    def propose(self, steps: list[TACStep], outcome: float) -> TableUpdate | None:
+    async def propose(self, steps: list[TACStep], outcome: float, feedback: list[StepFeedback], calls: Calls) -> U | None:
         return None
 
-    def commit(self, update: TableUpdate) -> None:
+    def commit(self, update: U) -> None:
         pass
+
+    def parse_update(self, data: dict[str, Any]) -> U:
+        raise NotImplementedError(f"{type(self).__name__} does not learn, so it has no update to read")
 
     def state(self) -> dict[str, Any] | None:
         return None

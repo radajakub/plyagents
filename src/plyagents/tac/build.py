@@ -8,8 +8,10 @@ from plybench.player.player import PlayerIdentifier
 
 from plyagents.tac.actors.build import ACTORS
 from plyagents.tac.actors.tabular import TabularActorParams
+from plyagents.tac.configs.components import Services
 from plyagents.tac.critics.build import CRITICS
 from plyagents.tac.enums import CriticType, TargetType
+from plyagents.tac.feedback.build import FEEDBACKS
 from plyagents.tac.params import TACParams
 from plyagents.tac.player import TACPlayer
 from plyagents.tac.rewards.build import REWARDS
@@ -19,7 +21,7 @@ from plyagents.tac.selectors.build import SELECTORS
 _ANNOUNCED: set[str] = set()
 
 
-def build_tac_player(player_config: PlayerConfig, identifier: PlayerIdentifier) -> TACPlayer:
+def build_tac_player(player_config: PlayerConfig, identifier: PlayerIdentifier, services: Services) -> TACPlayer:
     # the TAC composed of the components its params name, each built once by its role's collection
     params = player_config.params
 
@@ -35,11 +37,13 @@ def build_tac_player(player_config: PlayerConfig, identifier: PlayerIdentifier) 
     player = TACPlayer(
         player_config,
         identifier,
-        ACTORS.build(params.actor),
-        CRITICS.build(params.critic),
-        REWARDS.build(params.reward),
-        SELECTORS.build(params.train_selector),
-        SELECTORS.build(params.eval_selector),
+        services,
+        ACTORS.build(params.actor, services),
+        CRITICS.build(params.critic, services),
+        FEEDBACKS.build(params.feedback, services),
+        REWARDS.build(params.reward, services),
+        SELECTORS.build(params.train_selector, services),
+        SELECTORS.build(params.eval_selector, services),
         params.key,
     )
 
@@ -57,6 +61,7 @@ def describe_tac_player(spec: str, player: TACPlayer, params: TACParams) -> str:
     rows = [
         ("actor", params.actor.to_string(), player.actor.describe()),
         ("critic", params.critic.to_string(), player.critic.describe()),
+        ("feedback", params.feedback.to_string(), player.feedback.describe()),
         ("train selector", params.train_selector.to_string(), player.selectors[Mode.TRAIN].describe()),
         ("eval selector", params.eval_selector.to_string(), player.selectors[Mode.EVAL].describe()),
         ("reward", params.reward.to_string(), player.shaper.describe()),

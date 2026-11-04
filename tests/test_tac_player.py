@@ -100,7 +100,7 @@ def test_a_critic_target_without_a_critic_is_refused_when_the_player_is_built():
 
 
 @pytest.mark.parametrize("seed", range(5))
-def test_the_oracle_actor_never_loses_and_the_oracle_critic_gives_the_solved_values(tmp_path, monkeypatch, seed):
+def test_the_oracle_actor_never_loses_and_the_oracle_critic_gives_the_solved_values(tmp_path, monkeypatch, seed, calls):
     monkeypatch.chdir(tmp_path)  # the solved game is cached under ./cache
     tac = registry.player_config("tac:actor=oracle,critic=oracle")
     for i_config, o_config in ((tac.to_string(), "random:distribution=uniform"), ("random:distribution=uniform", tac.to_string())):
@@ -109,9 +109,9 @@ def test_the_oracle_actor_never_loses_and_the_oracle_critic_gives_the_solved_val
 
         steps = [TACStep.from_dict(step.data or {}) for step in game.steps_of(tac)]
         critic = OracleCritic()
-        critic.initialize(_game())
+        critic.initialize(_game(), registry.build_engine(registry.game_config("tic_tac_toe:")).prompt_adapter)
         solved = load_or_solve(_game())
-        assert [assessment.value for assessment in critic.assess(steps)] == [_solved_value(solved, step) for step in steps]
+        assert [assessment.value for assessment in asyncio.run(critic.assess(steps, calls))] == [_solved_value(solved, step) for step in steps]
 
 
 def test_a_step_records_the_key_and_the_action_in_the_agents_representation(tmp_path, monkeypatch):
@@ -121,6 +121,8 @@ def test_a_step_records_the_key_and_the_action_in_the_agents_representation(tmp_
 
     step = game.steps_of(tac)[0]
     data = TACStep.from_dict(step.data or {})
+    # the legal actions as the agent saw them, aligned with their OpenSpiel numbers; a bot actor reads no memory
+    assert len(data.legal) == len(data.legal_numbers) == 9 and data.action in data.legal and data.context is None
     assert data.key.startswith("You play as first player.")
     assert data.action == step.move
 

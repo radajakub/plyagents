@@ -10,7 +10,7 @@ TARGETS: Collection[TargetType, Target] = Collection(
     "target",
     TargetType,
     {
-        TargetType.MC: ComponentSpec(NoParams, lambda params: OutcomeTarget()),
-        TargetType.CRITIC: ComponentSpec(NoParams, lambda params: CriticTarget()),
+        TargetType.MC: ComponentSpec(NoParams, lambda params, services: OutcomeTarget()),
+        TargetType.CRITIC: ComponentSpec(NoParams, lambda params, services: CriticTarget()),
     },
 )

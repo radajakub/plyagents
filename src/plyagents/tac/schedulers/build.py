@@ -9,6 +9,6 @@ SCHEDULERS: Collection[SchedulerType, Scheduler] = Collection(
     "scheduler",
     SchedulerType,
     {
-        SchedulerType.CONSTANT: ComponentSpec(ConstantParams, lambda params: ConstantScheduler(params.beta)),
+        SchedulerType.CONSTANT: ComponentSpec(ConstantParams, lambda params, services: ConstantScheduler(params.beta)),
     },
 )

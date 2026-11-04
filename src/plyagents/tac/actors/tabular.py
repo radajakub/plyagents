@@ -10,6 +10,7 @@ from plyagents.tac.actors.base import Actor
 from plyagents.tac.configs.components import ComponentConfig, ComponentParams
 from plyagents.tac.enums import SchedulerType, TargetType
 from plyagents.tac.model.assessment import Assessment
+from plyagents.tac.model.feedback import StepFeedback
 from plyagents.tac.model.step import Situation, TACStep
 from plyagents.tac.model.table import Sample, Table, TableUpdate
 from plyagents.tac.schedulers.base import Scheduler
@@ -17,6 +18,7 @@ from plyagents.tac.schedulers.build import SCHEDULERS
 from plyagents.tac.selectors.base import Selector
 from plyagents.tac.targets.base import Target
 from plyagents.tac.targets.build import TARGETS
+from plyagents.tac.utils.calls import Calls
 from plyagents.tac.utils.options import read_options
 
 
@@ -33,7 +35,7 @@ class TabularActorParams(ComponentParams):
         return cls(target, scheduler)
 
 
-class TabularActor(Actor):
+class TabularActor(Actor[TableUpdate]):
     # Q(z, a) <- Q(z, a) + beta (y - Q(z, a)), with the target y from a Target; one table of actions per key
     def __init__(self, target: Target, scheduler: Scheduler) -> None:
         self.target = target
@@ -46,7 +48,7 @@ class TabularActor(Actor):
         index = selector.select([estimate.value for estimate in estimates], [estimate.count for estimate in estimates], rng)
         return PlayerOutput(action=situation.legal[index])
 
-    def propose(self, steps: list[TACStep], assessments: list[Assessment], outcome: float) -> TableUpdate | None:
+    async def propose(self, steps: list[TACStep], assessments: list[Assessment], outcome: float, feedback: list[StepFeedback], calls: Calls) -> TableUpdate | None:
         targets = self.target.targets(assessments, outcome)
         return TableUpdate(tuple(Sample(step.key, target, step.action) for step, target in zip(steps, targets) if step.action is not None))
 
@@ -54,6 +56,9 @@ class TabularActor(Actor):
         for sample in update.samples:
             assert sample.action is not None, "an action-value sample names its action"
             self.tables.setdefault(sample.key, Table()).update(sample.action, sample.target, self.scheduler.step_size)
+
+    def parse_update(self, data: dict[str, Any]) -> TableUpdate:
+        return TableUpdate.from_dict(data)
 
     def state(self) -> dict[str, Any] | None:
         return {key: table.to_dict() for key, table in self.tables.items()}

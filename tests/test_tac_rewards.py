@@ -35,11 +35,11 @@ def test_the_length_penalty_shaper_subtracts_the_penalty_per_agent_move():
     assert LengthPenaltyShaper(my_fail=-2.0, penalty=0.0).outcome(GameResults.MY_FAIL, _steps(4)) == -2.0
 
 
-def test_the_collection_builds_each_shaper_with_its_params():
-    result = REWARDS.build(REWARDS.config("result[my_fail=-2.0]"))
+def test_the_collection_builds_each_shaper_with_its_params(services):
+    result = REWARDS.build(REWARDS.config("result[my_fail=-2.0]"), services)
     assert isinstance(result, ResultShaper) and not isinstance(result, LengthPenaltyShaper)
     assert result.outcome(GameResults.MY_FAIL, _steps(2)) == -2.0
-    shaper = REWARDS.build(REWARDS.config("length_penalty[penalty=0.1,my_fail=-2.0]"))
+    shaper = REWARDS.build(REWARDS.config("length_penalty[penalty=0.1,my_fail=-2.0]"), services)
     assert isinstance(shaper, LengthPenaltyShaper)
     assert shaper.outcome(GameResults.MY_FAIL, _steps(2)) == pytest.approx(-2.2)
     assert REWARDS.config("length_penalty").to_string() == "length_penalty"

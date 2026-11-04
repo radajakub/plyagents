@@ -31,6 +31,10 @@ class SchedulerType(ExtendedEnum):
     CONSTANT = "constant"
 
 
+class FeedbackType(ExtendedEnum):
+    NONE = "none"
+
+
 class RewardType(ExtendedEnum):
     RESULT = "result"
     LENGTH_PENALTY = "length_penalty"

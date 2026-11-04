@@ -6,6 +6,7 @@ from dataclasses import Field, dataclass, fields
 from typing import Any, ClassVar
 
 from plybench.utils.enums import ExtendedEnum
+from plyllm import LLM
 
 from plyagents.tac.utils.options import read_options
 
@@ -62,7 +63,13 @@ class ComponentConfig[E: ExtendedEnum]:
 @dataclass(frozen=True)
 class ComponentSpec[T, P: ComponentParams]:
     params_cls: type[P]
-    build: Callable[[P], T]
+    build: Callable[[P, Services], T]
+
+
+@dataclass(frozen=True)
+class Services:
+    # what every builder hands a component besides its params: the LLM router (each LLM component names its own model)
+    llm: LLM
 
 
 class Collection[E: ExtendedEnum, T]:
@@ -84,5 +91,5 @@ class Collection[E: ExtendedEnum, T]:
     def default(self, kind: E) -> ComponentConfig[E]:
         return ComponentConfig(kind, self.specs[kind].params_cls())
 
-    def build(self, config: ComponentConfig[E]) -> T:
-        return self.specs[config.kind].build(config.params)
+    def build(self, config: ComponentConfig[E], services: Services) -> T:
+        return self.specs[config.kind].build(config.params, services)

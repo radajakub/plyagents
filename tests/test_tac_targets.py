@@ -26,6 +26,6 @@ def test_the_critic_target_needs_values():
         CriticTarget().targets([Assessment(None, ""), Assessment(None, "")], 1.0)
 
 
-def test_the_collection_builds_both_targets():
-    assert isinstance(TARGETS.build(TARGETS.config("mc")), OutcomeTarget)
-    assert isinstance(TARGETS.build(TARGETS.config("critic")), CriticTarget)
+def test_the_collection_builds_both_targets(services):
+    assert isinstance(TARGETS.build(TARGETS.config("mc"), services), OutcomeTarget)
+    assert isinstance(TARGETS.build(TARGETS.config("critic"), services), CriticTarget)

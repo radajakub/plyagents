@@ -10,7 +10,7 @@ REWARDS: Collection[RewardType, RewardShaper] = Collection(
     "reward",
     RewardType,
     {
-        RewardType.RESULT: ComponentSpec(ResultParams, lambda params: ResultShaper(params.my_fail, params.opponent_fail)),
-        RewardType.LENGTH_PENALTY: ComponentSpec(LengthPenaltyParams, lambda params: LengthPenaltyShaper(params.my_fail, params.opponent_fail, params.penalty)),
+        RewardType.RESULT: ComponentSpec(ResultParams, lambda params, services: ResultShaper(params.my_fail, params.opponent_fail)),
+        RewardType.LENGTH_PENALTY: ComponentSpec(LengthPenaltyParams, lambda params, services: LengthPenaltyShaper(params.my_fail, params.opponent_fail, params.penalty)),
     },
 )
