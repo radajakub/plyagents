@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from plybench.common.enums import Mode
 from plybench.configs.player_config import PlayerConfig
 from plybench.player.player import PlayerIdentifier
@@ -41,15 +43,17 @@ def build_tac_player(player_config: PlayerConfig, identifier: PlayerIdentifier) 
         params.key,
     )
 
-    if params.debug and player_config.to_string() not in _ANNOUNCED:
-        # plybench builds a player for every evaluation game, so each config is described once per process
-        _ANNOUNCED.add(player_config.to_string())
-        print(describe_tac_player(player, params))
+    # plybench builds a player for every evaluation game and every epoch, each epoch with its own checkpoint, so a config is
+    # described once per process, whatever checkpoint it carries
+    spec = f"{player_config.key}:{replace(params, checkpoint_path=None).to_string()}"
+    if params.debug and spec not in _ANNOUNCED:
+        _ANNOUNCED.add(spec)
+        print(describe_tac_player(spec, player, params))
 
     return player
 
 
-def describe_tac_player(player: TACPlayer, params: TACParams) -> str:
+def describe_tac_player(spec: str, player: TACPlayer, params: TACParams) -> str:
     rows = [
         ("actor", params.actor.to_string(), player.actor.describe()),
         ("critic", params.critic.to_string(), player.critic.describe()),
@@ -59,4 +63,4 @@ def describe_tac_player(player: TACPlayer, params: TACParams) -> str:
         ("key", params.key.value, "the observation text in this formalism, for retrieval only"),
     ]
     width = max(len(role) for role, _, _ in rows)
-    return "\n".join([f"TAC player {player}", *(f"  {role:<{width}}  {config}: {summary}" for role, config, summary in rows)])
+    return "\n".join([f"TAC player {spec}", *(f"  {role:<{width}}  {config}: {summary}" for role, config, summary in rows)])

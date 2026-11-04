@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 from plybench.app import PlyBench
 from plybench.common.enums import GameResults
+from plybench.configs.player_config import PlayerConfig
 from plybench.core.minimax import AVQCache, load_or_solve
 from plybench.harness.training.training import TrainingHarness
 from plyllm import LLMConfig
@@ -16,6 +18,7 @@ from plyllm import LLMConfig
 from plyagents.tac import build
 from plyagents.tac.critics.oracle import OracleCritic
 from plyagents.tac.model.step import TACStep
+from plyagents.tac.params import TACParams
 from plyagents.tac.player import TACPlayer
 
 op = PlyBench(LLMConfig())
@@ -52,7 +55,7 @@ def _harness() -> TrainingHarness:
 
 def _outputs(harness: TrainingHarness) -> tuple[dict, list[dict]]:
     # the last checkpoint and every cached update of the run, in order
-    run = harness._matrix()[0]
+    run = harness.runs[0]
     state = json.loads((harness.path_builder.checkpoint(harness.experiment, run, EPOCHS) / "state.json").read_text())
     updates = [
         json.loads((harness.path_builder.learner_dir(harness.experiment, run, epoch) / f"game_{game}" / "update.json").read_text())
@@ -72,8 +75,15 @@ def test_debug_describes_each_component_once_per_config(monkeypatch, capsys):
     for _ in range(3):
         registry.build_player(_game(), config, "i")
 
+    # each epoch gets the player with another checkpoint; still the same config
+    params = config.params
+    assert isinstance(params, TACParams)
+    for epoch in range(2):
+        registry.build_player(_game(), PlayerConfig(config.key, params.with_checkpoint(Path(f"results/epoch_{epoch}/checkpoint"))), "i")
+
     printed = capsys.readouterr().out
     assert printed.count("TAC player") == 1
+    assert "checkpoint" not in printed
     for line in ("tabular[target=critic]: Q(z, a) toward y_t = v_{t+1}", "eps_greedy[eps=0.2]: a random action with probability 0.2", "eval selector", "reward", "key"):
         assert line in printed
 
