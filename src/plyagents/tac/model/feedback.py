@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, Literal
+
+# the grades of a move, worst first
+type Grade = Literal["mistake", "dubious", "neutral", "good", "strong"]
+GRADES: tuple[Grade, ...] = ("mistake", "dubious", "neutral", "good", "strong")
 
 
 @dataclass(frozen=True)
 class StepFeedback:
     # the feedback model's verdict on one step of the agent: a grade, why, a lesson for the actor's memory and a note for the
     # critic's; all empty when the feedback gives none
-    grade: str | None = None
+    grade: Grade | None = None
     reason: str = ""
     lesson: str | None = None
     critic_note: str | None = None

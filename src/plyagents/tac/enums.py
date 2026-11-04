@@ -38,6 +38,8 @@ class ApplyType(ExtendedEnum):
 
 class FeedbackType(ExtendedEnum):
     NONE = "none"
+    ORACLE = "oracle"
+    LLM = "llm"
 
 
 class RewardType(ExtendedEnum):
