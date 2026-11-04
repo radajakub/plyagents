@@ -50,4 +50,4 @@ class OracleFeedback(Feedback):
         return [self._judge(step) for step in steps]
 
     def describe(self) -> str:
-        return "oracle: grades each move by Q*(s, a) against V*(s) and names the best moves (privileged: reads the true state)"
+        return "grades each move by Q*(s, a) against V*(s) and names the best moves (privileged: reads the true state)"

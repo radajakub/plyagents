@@ -13,4 +13,4 @@ class NoFeedback(Feedback):
         return [StepFeedback() for _ in steps]
 
     def describe(self) -> str:
-        return "none: no verdict, no call"
+        return "no verdict, no call"

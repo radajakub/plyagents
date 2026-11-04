@@ -7,8 +7,7 @@ from plyagents.tac.actors.llm import LLMActor, LLMActorParams
 from plyagents.tac.actors.oracle import OracleActor
 from plyagents.tac.actors.tabular import TabularActor, TabularActorParams
 from plyagents.tac.apply.build import APPLIES
-from plyagents.tac.configs.components import Collection, ComponentSpec, NoParams
-from plyagents.tac.configs.model import require_model
+from plyagents.tac.configs.components import Collection, ComponentSpec, NoParams, require_model
 from plyagents.tac.enums import ActorType
 from plyagents.tac.schedulers.build import SCHEDULERS
 from plyagents.tac.targets.build import TARGETS
@@ -25,7 +24,7 @@ ACTORS: Collection[ActorType, Actor] = Collection(
             LLMActorParams,
             lambda params, services: LLMActor(
                 services.llm,
-                require_model(params.model, "llm actor"),
+                require_model(params.model, "llm actor", services),
                 params.observation,
                 build_output_strategy(params.strategy),
                 params.memory,

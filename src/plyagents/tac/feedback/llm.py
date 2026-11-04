@@ -91,4 +91,4 @@ class LLMFeedback(Feedback):
 
     def describe(self) -> str:
         limit = f", lessons of at most {self.lesson_chars} characters" if self.lesson_chars is not None else ""
-        return f"llm: {self.model.to_string()} grades every move of the game in one call{limit}"
+        return f"{self.model.to_string()} grades every move of the game in one call{limit}"

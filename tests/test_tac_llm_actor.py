@@ -37,7 +37,10 @@ MODEL = ModelSpec.from_string("metacentrum:gpt-oss-120b[reasoning_effort=low]")
 
 
 class _ScriptedLLM:
-    # plays the first legal move; as F, a lesson for every step; asked to shorten, a short text. Keeps every prompt and seed
+    # plays the first legal move; as F, a lesson for every step; asked to shorten, a short text. Keeps every prompt and seed. It
+    # stands for no configured provider, so building the player does not validate the models against it
+    available_providers: list = []
+
     def __init__(self) -> None:
         self.prompts: list[str] = []
         self.seeds: list[int | None] = []

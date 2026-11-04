@@ -73,6 +73,21 @@ class Services:
     llm: LLM
 
 
+def require_model(model: ModelSpec | None, component: str, services: Services) -> ModelSpec:
+    # an LLM component's model, checked when the player is built rather than at its first call: it must be named, and its
+    # options must suit it (plyllm's validation, e.g. a thinking-only model without thinking_enabled). A provider that is not
+    # configured here is not checked; its first call says so
+    if model is None:
+        raise ValueError(f"{component} calls an LLM, so it needs a model: model=provider:model[options] in its brackets")
+    config = model.config
+    if config.provider in services.llm.available_providers:
+        try:
+            services.llm.resolve_model(config.provider, config.model_name).validate(config.options)
+        except ValueError as error:
+            raise ValueError(f"{component}: model {model.to_string()}: {error}") from error
+    return model
+
+
 class Collection[E: ExtendedEnum, T]:
     # the components of one role by type: parses their configs and builds them
     def __init__(self, role: str, kinds: type[E], specs: Mapping[E, ComponentSpec[T, Any]]) -> None:

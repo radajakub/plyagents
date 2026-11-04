@@ -7,9 +7,9 @@ from dataclasses import dataclass
 
 import pytest
 from plybench.utils.enums import ExtendedEnum
-from plyllm import ModelConfig
+from plyllm import LLM, LLMConfig, MetacentrumProviderConfig, ModelConfig
 
-from plyagents.tac.configs.components import Collection, ComponentConfig, ComponentParams, ComponentSpec, NoParams
+from plyagents.tac.configs.components import Collection, ComponentConfig, ComponentParams, ComponentSpec, NoParams, Services, require_model
 from plyagents.tac.configs.model import ModelSpec
 from plyagents.tac.utils.options import read_options
 
@@ -71,3 +71,20 @@ def test_a_model_is_written_with_its_options_in_brackets():
     assert not any(char in model.path_suffix for char in "=,[]:")
     with pytest.raises(ValueError):
         ModelSpec.from_string("nowhere:model")
+
+
+def test_a_models_options_are_validated_when_built_against_a_configured_provider():
+    # a configured Metacentrum client (nothing is called): gpt-oss-120b reasons always, so it needs thinking_enabled
+    services = Services(LLM(LLMConfig(metacentrum=MetacentrumProviderConfig(api_key="unused", base_url="http://localhost"))))
+    with pytest.raises(ValueError, match="requires thinking to be enabled"):
+        require_model(ModelSpec.from_string("metacentrum:gpt-oss-120b[reasoning_effort=low]"), "llm actor", services)
+    good = ModelSpec.from_string("metacentrum:gpt-oss-120b[thinking_enabled=True,reasoning_effort=low]")
+    assert require_model(good, "llm actor", services) == good
+
+
+def test_a_missing_model_is_named_and_an_unconfigured_provider_is_not_checked(services):
+    with pytest.raises(ValueError, match="needs a model"):
+        require_model(None, "compress", services)
+    # no provider configured: the first call will say so
+    model = ModelSpec.from_string("metacentrum:gpt-oss-120b[reasoning_effort=low]")
+    assert require_model(model, "compress", services) == model

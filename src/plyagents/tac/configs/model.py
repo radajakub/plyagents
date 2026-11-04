@@ -5,13 +5,6 @@ from dataclasses import dataclass
 from plyllm import ModelConfig, options_to_string
 
 
-def require_model(model: ModelSpec | None, component: str) -> ModelSpec:
-    # an LLM component built without a model: said when the player is built, not at its first call
-    if model is None:
-        raise ValueError(f"{component} calls an LLM, so it needs a model: model=provider:model[options] in its brackets")
-    return model
-
-
 @dataclass(frozen=True)
 class ModelSpec:
     # the model an LLM component calls, written provider:model[options] inside a component config, e.g.
