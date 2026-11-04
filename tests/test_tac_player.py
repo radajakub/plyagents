@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 from plybench.app import PlyBench
-from plybench.common.enums import GameResults
+from plybench.common.enums import GameResults, Mode
 from plybench.configs.player_config import PlayerConfig
 from plybench.core.minimax import AVQCache, load_or_solve
 from plybench.harness.training.training import TrainingHarness
@@ -157,3 +157,44 @@ def test_tabular_training_learns_and_a_resumed_run_lands_on_the_same_state(tmp_p
 
     assert failed == [3]
     assert _outputs(resumed) == (state, updates)
+
+
+async def _learn_and_play(config: str, games: int) -> list[list[str]]:
+    # trains one player on seeded games against random (propose and commit after each, as the harness does), then evaluates it;
+    # the moves of every game. Outside the harness, so the game seeds do not depend on a record path
+    engine = registry.build_engine(registry.game_config("tic_tac_toe:"))
+    player = registry.build_player(engine.game, registry.player_config(config), "i")
+    assert isinstance(player, TACPlayer)
+    opponent = registry.build_player(engine.game, registry.player_config("random:distribution=uniform"), "o")
+    moves = []
+    player.set_mode(Mode.TRAIN)
+    for seed in range(games):
+        game = await engine.play((player, opponent), seed=seed)
+        update = await player.propose(game)
+        assert update is not None
+        player.commit(update)
+        moves.append([step.move for step in game.steps])
+    player.set_mode(Mode.EVAL)
+    for seed in range(games, games + 10):
+        moves.append([step.move for step in (await engine.play((player, opponent), seed=seed)).steps])
+    return moves
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        # the key is only for retrieval: in tic-tac-toe both formalisms name the same board, so the same choices follow
+        (
+            "tac:actor=tabular[target=critic],critic=oracle,train_selector=eps_greedy[eps=0.2]",
+            "tac:actor=tabular[target=critic],critic=oracle,train_selector=eps_greedy[eps=0.2],key=state",
+        ),
+        # under target=mc the critic never reaches the actor, and it draws nothing from the player's random stream
+        ("tac:actor=tabular,train_selector=eps_greedy[eps=0.2]", "tac:actor=tabular,critic=tabular,train_selector=eps_greedy[eps=0.2]"),
+    ],
+)
+def test_equivalent_configs_play_the_same_games_from_the_same_seeds(tmp_path, monkeypatch, first, second):
+    monkeypatch.chdir(tmp_path)  # the oracle's solved game is cached under ./cache
+    moves = asyncio.run(_learn_and_play(first, 60))
+    assert moves == asyncio.run(_learn_and_play(second, 60))
+    # and the check has teeth: the games are not all alike
+    assert len({tuple(game) for game in moves}) > 30
