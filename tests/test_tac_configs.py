@@ -7,8 +7,10 @@ from dataclasses import dataclass
 
 import pytest
 from plybench.utils.enums import ExtendedEnum
+from plyllm import ModelConfig
 
 from plyagents.tac.configs.components import Collection, ComponentConfig, ComponentParams, ComponentSpec, NoParams
+from plyagents.tac.configs.model import ModelSpec
 from plyagents.tac.utils.options import read_options
 
 
@@ -57,3 +59,15 @@ def test_a_collection_refuses_unknown_types_and_params():
         _COLLECTION.config("plain[rate=0.2]")
     with pytest.raises(ValueError, match="type\\[params\\]"):
         _COLLECTION.config("tuned[rate=0.2")
+
+
+def test_a_model_is_written_with_its_options_in_brackets():
+    model = ModelSpec.from_string("metacentrum:gpt-oss-120b[thinking_enabled=True,reasoning_effort=low]")
+    assert model.config == ModelConfig.from_string("metacentrum:gpt-oss-120b:thinking_enabled=True,reasoning_effort=low")
+    assert model.to_string() == "metacentrum:gpt-oss-120b[thinking_enabled=True,reasoning_effort=low]"
+    assert ModelSpec.from_string(model.to_string()) == model
+    assert ModelSpec.from_string("metacentrum:gpt-oss-120b").to_string() == "metacentrum:gpt-oss-120b"
+    # no separators of the config strings in the path
+    assert not any(char in model.path_suffix for char in "=,[]:")
+    with pytest.raises(ValueError):
+        ModelSpec.from_string("nowhere:model")

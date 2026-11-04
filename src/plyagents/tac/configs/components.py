@@ -8,6 +8,7 @@ from typing import Any, ClassVar
 from plybench.utils.enums import ExtendedEnum
 from plyllm import LLM
 
+from plyagents.tac.configs.model import ModelSpec
 from plyagents.tac.utils.options import read_options
 
 # A component is configured like a plybench player: a type (an enum value) and its params, written "type[params]", e.g.
@@ -30,11 +31,11 @@ class ComponentParams(ABC):
         return [(field.name, getattr(self, field.name)) for field in fields(self) if getattr(self, field.name) != getattr(defaults, field.name)]
 
     def to_string(self) -> str:
-        return ",".join(f"{name}={value.to_string() if isinstance(value, ComponentConfig) else value}" for name, value in self._changed())
+        return ",".join(f"{name}={value.to_string() if isinstance(value, (ComponentConfig, ModelSpec)) else value}" for name, value in self._changed())
 
     @property
     def path_suffix(self) -> str:
-        return "-".join(f"{name}-{value.path_suffix if isinstance(value, ComponentConfig) else value}" for name, value in self._changed())
+        return "-".join(f"{name}-{value.path_suffix if isinstance(value, (ComponentConfig, ModelSpec)) else value}" for name, value in self._changed())
 
 
 @dataclass(frozen=True, eq=True)

@@ -31,6 +31,11 @@ class SchedulerType(ExtendedEnum):
     CONSTANT = "constant"
 
 
+class ApplyType(ExtendedEnum):
+    TRUNCATE = "truncate"
+    COMPRESS = "compress"
+
+
 class FeedbackType(ExtendedEnum):
     NONE = "none"
 
