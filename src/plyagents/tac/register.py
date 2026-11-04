@@ -14,4 +14,6 @@ def register_players(registry: Registry, llm: LLM) -> None:
     # the plybench.players entry point (pyproject.toml): every PlyBench in plyagents' environment builds tac: players, whose LLM
     # components call through this LLM router
     services = Services(llm)
-    registry.register_player(PlayerSpec("tac", TACParams, lambda game, player_config, identifier: build_tac_player(player_config, identifier, services), tracker=TACTracker()))
+    registry.register_player(
+        PlayerSpec("tac", TACParams, lambda game, player_config, identifier: build_tac_player(game, player_config, identifier, services), tracker=TACTracker())
+    )

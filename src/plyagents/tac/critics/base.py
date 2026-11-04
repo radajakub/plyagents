@@ -16,6 +16,12 @@ from plyagents.tac.utils.calls import Calls
 class Critic[U: ComponentUpdate](ABC):
     # estimates V(s) of the visited states; a critic that learns overrides propose, commit, parse_update, state and load_state,
     # U being what one game teaches it
+    def prepare(self, game: TurnBasedGame) -> None:
+        # once, when the player is built: what propose needs from the game itself, since a game replayed on a resume is not
+        # played again and so never initializes
+        pass
+
+    # before every game it plays
     def initialize(self, game: TurnBasedGame, adapter_template: PromptAdapter) -> None:
         pass
 

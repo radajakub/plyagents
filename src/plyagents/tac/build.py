@@ -4,6 +4,7 @@ from dataclasses import replace
 
 from plybench.common.enums import Mode
 from plybench.configs.player_config import PlayerConfig
+from plybench.core.game import TurnBasedGame
 from plybench.player.player import PlayerIdentifier
 
 from plyagents.tac.actors.build import ACTORS
@@ -21,7 +22,7 @@ from plyagents.tac.selectors.build import SELECTORS
 _ANNOUNCED: set[str] = set()
 
 
-def build_tac_player(player_config: PlayerConfig, identifier: PlayerIdentifier, services: Services) -> TACPlayer:
+def build_tac_player(game: TurnBasedGame, player_config: PlayerConfig, identifier: PlayerIdentifier, services: Services) -> TACPlayer:
     # the TAC composed of the components its params name, each built once by its role's collection
     params = player_config.params
 
@@ -46,6 +47,7 @@ def build_tac_player(player_config: PlayerConfig, identifier: PlayerIdentifier, 
         SELECTORS.build(params.eval_selector, services),
         params.key,
     )
+    player.prepare(game)
 
     # plybench builds a player for every evaluation game and every epoch, each epoch with its own checkpoint, so a config is
     # described once per process, whatever checkpoint it carries

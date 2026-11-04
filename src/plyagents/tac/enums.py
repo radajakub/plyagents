@@ -8,6 +8,7 @@ from plybench.utils.enums import ExtendedEnum
 class ActorType(ExtendedEnum):
     ORACLE = "oracle"
     TABULAR = "tabular"
+    LLM = "llm"
 
 
 class CriticType(ExtendedEnum):

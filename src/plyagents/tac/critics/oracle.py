@@ -17,7 +17,11 @@ class OracleCritic(Critic[ComponentUpdate]):
     def __init__(self) -> None:
         self._cache: AVQCache | None = None
 
+    def prepare(self, game: TurnBasedGame) -> None:
+        self._cache = load_or_solve(game)
+
     def initialize(self, game: TurnBasedGame, adapter_template: PromptAdapter) -> None:
+        # again per game: a sampled variant is solved per instance (load_or_solve keeps each in memory)
         self._cache = load_or_solve(game)
 
     def _value(self, step: TACStep) -> float:

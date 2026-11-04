@@ -58,6 +58,12 @@ class LLMFeedback(Feedback):
         self.model = model
         self.lesson_chars = lesson_chars
 
+    @staticmethod
+    def system(steps: list[TACStep]) -> str:
+        # the rules of the game as the agent read them, from the record (the player keeps them with its first step of a game)
+        rules = next((step.rules for step in steps if step.rules), None)
+        return f"{SYSTEM}\n\nThe rules, as the agent was given them:\n{rules}" if rules else SYSTEM
+
     def prompt(self, steps: list[TACStep], assessments: list[Assessment], outcome: float) -> str:
         shown = [
             f"Step {number}:\n{step.key}\nMove: {step.action or 'no valid move'}" + (f"\nValue estimate: {assessment.text}" if assessment.text else "")
@@ -74,7 +80,7 @@ class LLMFeedback(Feedback):
         )
 
     async def give(self, steps: list[TACStep], assessments: list[Assessment], outcome: float, calls: Calls) -> list[StepFeedback]:
-        answer = await calls.structured("feedback", self.model.config, SYSTEM, self.prompt(steps, assessments, outcome), _Verdicts)
+        answer = await calls.structured("feedback", self.model.config, self.system(steps), self.prompt(steps, assessments, outcome), _Verdicts)
         by_step: dict[int, _Verdict] = {}
         for verdict in answer.verdicts:
             by_step.setdefault(verdict.step, verdict)

@@ -19,6 +19,8 @@ class TACStep:
     legal_numbers: tuple[int, ...] = ()
     # what the actor read from its memory for this move; None when it read nothing
     context: str | None = None
+    # the rules of the game as an LLM is given them (the adapter's head prompt); kept with the player's first step of a game only
+    rules: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {**asdict(self), "legal": list(self.legal), "legal_numbers": list(self.legal_numbers)}
@@ -26,7 +28,16 @@ class TACStep:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> TACStep:
         # the record drops empty values (StepData), and records from before a field existed lack it
-        return cls(data["key"], data.get("action"), data["player"], data["os_state"], tuple(data.get("legal", ())), tuple(data.get("legal_numbers", ())), data.get("context"))
+        return cls(
+            data["key"],
+            data.get("action"),
+            data["player"],
+            data["os_state"],
+            tuple(data.get("legal", ())),
+            tuple(data.get("legal_numbers", ())),
+            data.get("context"),
+            data.get("rules"),
+        )
 
 
 @dataclass(frozen=True)

@@ -87,3 +87,12 @@ def test_the_collection_builds_each_feedback_and_the_llm_needs_a_model(services)
     assert isinstance(llm, LLMFeedback) and llm.model == MODEL and llm.lesson_chars == 300
     with pytest.raises(ValueError, match="needs a model"):
         FEEDBACKS.build(FEEDBACKS.config("llm"), services)
+
+
+def test_the_rules_come_from_the_record(stub_calls):
+    calls, _, recorded = stub_calls([json.dumps({"verdicts": []})] * 2)
+    feedback = LLMFeedback(MODEL, None)
+    asyncio.run(feedback.give([TACStep("z", "a", 0, "s", rules="Tic Tac Toe is a two-player game."), TACStep("y", "b", 0, "t")], [Assessment(None, "")] * 2, 1.0, calls))
+    asyncio.run(feedback.give([TACStep("z", "a", 0, "s")], [Assessment(None, "")], 1.0, calls))
+    assert "The rules, as the agent was given them:\nTic Tac Toe is a two-player game." in recorded[0].system_message
+    assert "The rules" not in recorded[1].system_message

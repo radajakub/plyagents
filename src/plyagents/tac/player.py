@@ -53,9 +53,18 @@ class TACPlayer(LearnablePlayer[TACUpdate]):
         self.selectors = {Mode.TRAIN: train_selector, Mode.EVAL: eval_selector}
         self.key_type = key_type
         self._key_adapter: PromptAdapter | None = None
+        self._rules: str | None = None
+
+    def prepare(self, game: TurnBasedGame) -> None:
+        # once, when built: a game replayed on a resume is proposed from its record without being played, so without initialize
+        self.actor.prepare(game)
+        self.critic.prepare(game)
+        self.feedback.prepare(game)
 
     def _initialize_policy(self, game: TurnBasedGame, prompt_adapter_template: PromptAdapter) -> None:
         self._key_adapter = prompt_adapter_template.for_observation_type(self.key_type)
+        # the rules of this game, recorded with the first move: propose reads them from the record, which a replayed game has
+        self._rules = prompt_adapter_template.head_prompt
         self.actor.initialize(game, prompt_adapter_template)
         self.critic.initialize(game, prompt_adapter_template)
         self.feedback.initialize(game, prompt_adapter_template)
@@ -79,7 +88,8 @@ class TACPlayer(LearnablePlayer[TACUpdate]):
         extra = dict(output.data or {})
         context = extra.pop("context", None)
         legal_numbers = tuple(move.number for move in legal_moves)
-        output.data = {**TACStep(situation.key, action, situation.player, situation.os_state, tuple(actions), legal_numbers, context).to_dict(), **extra}
+        rules, self._rules = self._rules, None
+        output.data = {**TACStep(situation.key, action, situation.player, situation.os_state, tuple(actions), legal_numbers, context, rules).to_dict(), **extra}
         return output
 
     async def propose(self, game: GameTracker) -> TACUpdate | None:

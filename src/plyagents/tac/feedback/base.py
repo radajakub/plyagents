@@ -13,6 +13,12 @@ from plyagents.tac.utils.calls import Calls
 
 class Feedback(ABC):
     # the feedback model F: once per game, a verdict on every step of the agent, read by the actor and the critic that learn from it
+    def prepare(self, game: TurnBasedGame) -> None:
+        # once, when the player is built: what propose needs from the game itself, since a game replayed on a resume is not
+        # played again and so never initializes
+        pass
+
+    # before every game it plays
     def initialize(self, game: TurnBasedGame, adapter_template: PromptAdapter) -> None:
         pass
 

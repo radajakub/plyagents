@@ -123,6 +123,9 @@ def test_a_step_records_the_key_and_the_action_in_the_agents_representation(tmp_
     data = TACStep.from_dict(step.data or {})
     # the legal actions as the agent saw them, aligned with their OpenSpiel numbers; a bot actor reads no memory
     assert len(data.legal) == len(data.legal_numbers) == 9 and data.action in data.legal and data.context is None
+    # the rules of the game are kept with the first move only
+    rules = [TACStep.from_dict(step.data or {}).rules for step in game.steps_of(tac)]
+    assert rules[0] and rules[0].startswith("Tic Tac Toe") and not any(rules[1:])
     assert data.key.startswith("You play as first player.")
     assert data.action == step.move
 
