@@ -1,0 +1,85 @@
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass, field
+from typing import Any
+
+from plyagents.tac.model.feedback import StepFeedback
+from plyagents.tac.model.update import ComponentUpdate
+
+
+@dataclass
+class Entry:
+    # the memory of one key: its text, the visits n_s, the actions taken there n_{s,a}, and the writes k_s
+    text: str = ""
+    visits: int = 0
+    actions: dict[str, int] = field(default_factory=dict)
+    writes: int = 0
+
+
+class KeyedMemory:
+    # the textual memory M (or M^V): one entry per key z, read by equality
+    def __init__(self, entries: dict[str, Entry] | None = None) -> None:
+        self.entries = entries if entries is not None else {}
+
+    def get(self, key: str) -> Entry:
+        return self.entries.get(key, Entry())
+
+    def to_dict(self) -> dict[str, Any]:
+        return {key: asdict(entry) for key, entry in self.entries.items()}
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> KeyedMemory:
+        return cls({key: Entry(entry["text"], entry["visits"], dict(entry["actions"]), entry["writes"]) for key, entry in data.items()})
+
+
+@dataclass(frozen=True)
+class MemoryWrite:
+    # one write of Apply: the entry before, the game's lesson for the key, the step size alpha, the old entry after shortening,
+    # the new entry, and whether it had to be cut to the budget
+    key: str
+    old: str
+    lesson: str
+    alpha: float
+    compressed: str
+    new: str
+    cut: bool
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> MemoryWrite:
+        return cls(**data)
+
+
+@dataclass(frozen=True)
+class MemoryUpdate(ComponentUpdate):
+    # what one game teaches a memory: the visits (key and action of every step, None for a failed move), the feedback it was
+    # given per step, and the writes. More than commit needs: update.json is then the full trace of the game's learning
+    visits: tuple[tuple[str, str | None], ...]
+    feedback: tuple[StepFeedback, ...]
+    writes: tuple[MemoryWrite, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "visits": [list(visit) for visit in self.visits],
+            "feedback": [step.to_dict() for step in self.feedback],
+            "writes": [asdict(write) for write in self.writes],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> MemoryUpdate:
+        return cls(
+            tuple((key, action) for key, action in data["visits"]),
+            tuple(StepFeedback.from_dict(step) for step in data["feedback"]),
+            tuple(MemoryWrite.from_dict(write) for write in data["writes"]),
+        )
+
+    def apply_to(self, memory: KeyedMemory) -> None:
+        # commit: count the visits and actions, replace the written entries and count the writes; deterministic
+        for key, action in self.visits:
+            entry = memory.entries.setdefault(key, Entry())
+            entry.visits += 1
+            if action is not None:
+                entry.actions[action] = entry.actions.get(action, 0) + 1
+        for write in self.writes:
+            entry = memory.entries.setdefault(write.key, Entry())
+            entry.text = write.new
+            entry.writes += 1
