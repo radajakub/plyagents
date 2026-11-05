@@ -15,6 +15,7 @@ class CriticType(ExtendedEnum):
     NONE = "none"
     ORACLE = "oracle"
     TABULAR = "tabular"
+    LLM = "llm"
 
 
 class SelectorType(ExtendedEnum):

@@ -3,7 +3,9 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from plyagents.tac.model.memory import KeyedMemory, MemoryWrite
+from plyagents.tac.model.feedback import StepFeedback
+from plyagents.tac.model.memory import KeyedMemory, MemoryUpdate, MemoryWrite
+from plyagents.tac.model.step import TACStep
 from plyagents.tac.schedulers.base import Scheduler
 from plyagents.tac.utils.calls import Calls
 
@@ -30,6 +32,14 @@ class Apply(ABC):
     @abstractmethod
     def describe(self) -> str:
         raise NotImplementedError
+
+    async def update(
+        self, memory: KeyedMemory, steps: list[TACStep], feedback: list[StepFeedback], texts: list[str | None], scheduler: Scheduler, budget: int | None, calls: Calls, role: str
+    ) -> MemoryUpdate:
+        # what one game teaches a memory: the text of each step (the actor's lesson, the critic's note; None writes nothing) written by
+        # write, with the visits and the feedback; the actor's memory and the critic's are written the same way
+        writes = await self.write(memory, [(step.key, text) for step, text in zip(steps, texts) if text], scheduler, budget, calls, role)
+        return MemoryUpdate(tuple((step.key, step.action) for step in steps), tuple(feedback), writes)
 
     async def write(self, memory: KeyedMemory, lessons: list[tuple[str, str]], scheduler: Scheduler, budget: int | None, calls: Calls, role: str) -> tuple[MemoryWrite, ...]:
         # lessons as (key, lesson) in step order; the lessons of a key visited several times are joined into one write

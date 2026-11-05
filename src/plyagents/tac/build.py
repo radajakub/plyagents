@@ -29,10 +29,11 @@ def build_tac_player(game: TurnBasedGame, player_config: PlayerConfig, identifie
     if not isinstance(params, TACParams):
         raise TypeError(f"{player_config.to_string()} is not a TAC config")
 
-    # a critic without values cannot give the actor its targets; caught here rather than after the first game
+    # a critic without values cannot give the actor its targets; caught here rather than after the first game. The llm critic's
+    # optional number is for diagnostics, not a target
     actor = params.actor.params
 
-    if isinstance(actor, TabularActorParams) and actor.target.kind is TargetType.CRITIC and params.critic.kind is CriticType.NONE:
+    if isinstance(actor, TabularActorParams) and actor.target.kind is TargetType.CRITIC and params.critic.kind in (CriticType.NONE, CriticType.LLM):
         raise ValueError("target=critic needs a critic that gives values (critic=oracle or critic=tabular)")
 
     player = TACPlayer(

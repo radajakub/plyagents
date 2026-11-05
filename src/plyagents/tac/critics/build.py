@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from plyagents.tac.configs.components import Collection, ComponentSpec, NoParams
+from plyagents.tac.apply.build import APPLIES
+from plyagents.tac.configs.components import Collection, ComponentSpec, NoParams, require_model
 from plyagents.tac.critics.base import Critic
+from plyagents.tac.critics.llm import LLMCritic, LLMCriticParams
 from plyagents.tac.critics.none import NoCritic
 from plyagents.tac.critics.oracle import OracleCritic
 from plyagents.tac.critics.tabular import TabularCritic, TabularCriticParams
@@ -15,5 +17,16 @@ CRITICS: Collection[CriticType, Critic] = Collection(
         CriticType.NONE: ComponentSpec(NoParams, lambda params, services: NoCritic()),
         CriticType.ORACLE: ComponentSpec(NoParams, lambda params, services: OracleCritic()),
         CriticType.TABULAR: ComponentSpec(TabularCriticParams, lambda params, services: TabularCritic(SCHEDULERS.build(params.scheduler, services))),
+        CriticType.LLM: ComponentSpec(
+            LLMCriticParams,
+            lambda params, services: LLMCritic(
+                require_model(params.model, "llm critic", services),
+                params.budget,
+                SCHEDULERS.build(params.scheduler, services),
+                APPLIES.build(params.apply, services),
+                params.assessment_chars,
+                params.value,
+            ),
+        ),
     },
 )

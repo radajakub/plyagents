@@ -116,9 +116,7 @@ class LLMActor(Actor[MemoryUpdate]):
     async def propose(self, steps: list[TACStep], assessments: list[Assessment], outcome: float, feedback: list[StepFeedback], calls: Calls) -> MemoryUpdate | None:
         if not self.reads_memory:
             return None
-        lessons = [(step.key, verdict.lesson) for step, verdict in zip(steps, feedback) if verdict.lesson]
-        writes = await self.apply.write(self.memory, lessons, self.scheduler, self.budget, calls, "apply")
-        return MemoryUpdate(tuple((step.key, step.action) for step in steps), tuple(feedback), writes)
+        return await self.apply.update(self.memory, steps, feedback, [verdict.lesson for verdict in feedback], self.scheduler, self.budget, calls, "apply")
 
     def commit(self, update: MemoryUpdate) -> None:
         update.apply_to(self.memory)

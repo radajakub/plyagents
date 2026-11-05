@@ -7,6 +7,8 @@ import asyncio
 import json
 
 import pytest
+from plybench.games.builtins import register_builtin_games
+from plybench.registry import Registry
 
 from plyagents.tac.configs.model import ModelSpec
 from plyagents.tac.feedback.build import FEEDBACKS
@@ -16,6 +18,7 @@ from plyagents.tac.feedback.oracle import OracleFeedback
 from plyagents.tac.model.assessment import Assessment
 from plyagents.tac.model.feedback import StepFeedback
 from plyagents.tac.model.step import TACStep
+from plyagents.tac.rewards.result import ResultShaper
 
 MODEL = ModelSpec.from_string("metacentrum:gpt-oss-120b[reasoning_effort=low]")
 
@@ -46,6 +49,34 @@ def test_the_oracle_grades_by_the_solved_game_and_names_the_best_move(tic_tac_to
     assert mistake.critic_note == "with best play this position draws"
     # a failed move has no action to judge
     assert failed == StepFeedback()
+
+
+def test_with_chance_the_oracle_names_expected_outcomes_not_draws(tmp_path, monkeypatch, calls):
+    # Monty Hall with the hell host: it opens no door, so the first pick (door 1) hides a goat and the car is behind door 2 or 3,
+    # each with 1/2: V* = 0 is an even chance, not a draw
+    monkeypatch.chdir(tmp_path)
+    registry = Registry()
+    register_builtin_games(registry)
+    engine = registry.build_engine(registry.game_config("monty_hall:num_doors=3,final=pick,host=hell,rules=hidden"))
+    engine.reset()
+    game = engine.game
+    # prepared at the start, as the player is when it is built: the solver solves from the game's current state
+    feedback = OracleFeedback()
+    feedback.prepare(game, ResultShaper())
+    game.step_chance(1)
+    game.step(game.get_legal_moves(0)[0])
+    game.step_chance(3)
+    moves = game.get_legal_moves(0)
+    legal = tuple(engine.action_class.from_openspiel(move, engine.interface_transformer).to_llm().string for move in moves)
+    numbers = tuple(move.number for move in moves)
+    steps = [TACStep("k", legal[0], 0, game.get_observation(0).state, legal, numbers), TACStep("k", legal[1], 0, game.get_observation(0).state, legal, numbers)]
+    stay, move = asyncio.run(feedback.give(steps, [Assessment(None, "")] * 2, -1.0, calls))
+
+    even = "has an expected outcome of +0.00 (a sure loss is -1, a sure win +1)"
+    assert stay.grade == "mistake" and f"Better: {legal[1]}, {legal[2]}." in (stay.lesson or "") and "expected outcome of -1.00" in (stay.lesson or "")
+    assert move.grade == "good" and even in (move.lesson or "")
+    assert stay.critic_note == f"with best play this position {even}"
+    assert "draw" not in f"{stay.lesson} {move.lesson} {stay.critic_note}"
 
 
 def test_the_llm_is_asked_once_with_the_numbered_moves_estimates_and_outcome(stub_calls):

@@ -32,5 +32,13 @@ class ResultShaper(RewardShaper):
     def outcome(self, result: GameResults, steps: list[TACStep]) -> float:
         return self.values[result]
 
+    def value_text(self, value: float, certain: bool) -> str:
+        win, loss = self.values[GameResults.WIN], self.values[GameResults.LOSS]
+        if not certain:
+            # with chance, 0 is not a draw but an even chance to win: the value is named as an expectation between its ends
+            return f"has an expected outcome of {value:+.2f} (a sure loss is {loss:+g}, a sure win {win:+g})"
+        names = {win: "wins", self.values[GameResults.DRAW]: "draws", loss: "loses"}
+        return names.get(value, f"is worth {value:+g}")
+
     def describe(self) -> str:
         return f"win +1, draw 0, loss -1, own fail {self.values[GameResults.MY_FAIL]:+g}, opponent fail {self.values[GameResults.OPPONENT_FAIL]:+g}"

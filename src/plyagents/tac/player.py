@@ -59,7 +59,7 @@ class TACPlayer(LearnablePlayer[TACUpdate]):
         # once, when built: a game replayed on a resume is proposed from its record without being played, so without initialize
         self.actor.prepare(game)
         self.critic.prepare(game)
-        self.feedback.prepare(game)
+        self.feedback.prepare(game, self.shaper)
 
     def _initialize_policy(self, game: TurnBasedGame, prompt_adapter_template: PromptAdapter) -> None:
         self._key_adapter = prompt_adapter_template.for_observation_type(self.key_type)

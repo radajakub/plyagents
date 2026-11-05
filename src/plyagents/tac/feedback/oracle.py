@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pyspiel as sp
 from plybench.core.game import TurnBasedGame
 from plybench.core.minimax import AVQCache, load_or_solve
 from plybench.core.prompt_adapter import PromptAdapter
@@ -8,13 +9,14 @@ from plyagents.tac.feedback.base import Feedback
 from plyagents.tac.model.assessment import Assessment
 from plyagents.tac.model.feedback import Grade, StepFeedback
 from plyagents.tac.model.step import TACStep
+from plyagents.tac.rewards.base import RewardShaper
+from plyagents.tac.rewards.result import ResultShaper
 from plyagents.tac.utils.calls import Calls
 
-_RESULT = {1.0: "wins", 0.0: "draws", -1.0: "loses"}
 
-
-def _result(value: float) -> str:
-    return _RESULT.get(value, f"is worth {value:+g}")
+def _certain(game: TurnBasedGame) -> bool:
+    # without chance nodes a solved value is an outcome that happens; with them it is an expectation
+    return game.game.get_type().chance_mode == sp.GameType.ChanceMode.DETERMINISTIC
 
 
 class OracleFeedback(Feedback):
@@ -22,13 +24,22 @@ class OracleFeedback(Feedback):
     # lose, a mistake when it loses; the lesson names the best moves. Privileged: it reads the true state
     def __init__(self) -> None:
         self._cache: AVQCache | None = None
+        # the words for a value: the player's shaper from prepare; the result's scale until then
+        self._shaper: RewardShaper = ResultShaper()
+        self._certain = True
 
-    def prepare(self, game: TurnBasedGame) -> None:
+    def prepare(self, game: TurnBasedGame, shaper: RewardShaper) -> None:
         self._cache = load_or_solve(game)
+        self._shaper = shaper
+        self._certain = _certain(game)
 
     def initialize(self, game: TurnBasedGame, adapter_template: PromptAdapter) -> None:
         # again per game: a sampled variant is solved per instance (load_or_solve keeps each in memory)
         self._cache = load_or_solve(game)
+        self._certain = _certain(game)
+
+    def _result(self, value: float) -> str:
+        return self._shaper.value_text(value, self._certain)
 
     def _judge(self, step: TACStep) -> StepFeedback:
         assert self._cache is not None, "initialize must be called before the feedback judges"
@@ -39,11 +50,11 @@ class OracleFeedback(Feedback):
         value, action_value = avq.V(), avq.Q(number)
         best = [action for action, other in zip(step.legal, step.legal_numbers) if avq.check_optimal(other)]
         reason = f"Q* {action_value:+g} against V* {value:+g}"
-        note = f"with best play this position {_result(value)}"
+        note = f"with best play this position {self._result(value)}"
         if action_value == value:
-            return StepFeedback("good", reason, f"{step.action} is a best move here: with best play it {_result(value)}.", note)
+            return StepFeedback("good", reason, f"{step.action} is a best move here: with best play it {self._result(value)}.", note)
         grade: Grade = "mistake" if action_value < 0 else "dubious"
-        lesson = f"{step.action} was a {grade} here: with best play it {_result(action_value)}. Better: {', '.join(best)}."
+        lesson = f"{step.action} was a {grade} here: with best play it {self._result(action_value)}. Better: {', '.join(best)}."
         return StepFeedback(grade, reason, lesson, note)
 
     async def give(self, steps: list[TACStep], assessments: list[Assessment], outcome: float, calls: Calls) -> list[StepFeedback]:
