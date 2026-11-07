@@ -7,6 +7,7 @@ from pathlib import Path
 from plybench.common.enums import ObservationType
 from plybench.configs.player_params import CheckpointedParams
 from plybench.utils.text import to_bool
+from plyllm import ModelConfig
 
 from plyagents.tac.actors.build import ACTORS
 from plyagents.tac.actors.llm import LLMActorParams
@@ -97,6 +98,11 @@ class TACParams(CheckpointedParams):
             model = models[role]
             parts.append(f"{kind} {role}" + (f" ({model.config.model_name})" if len(names) > 1 and model is not None else ""))
         return f"TAC: {', '.join(parts)}" + (f" ({names.pop()})" if len(names) == 1 else "")
+
+    def models(self) -> list[ModelConfig]:
+        # every model the TAC calls, once each in the order of the roles, for plybench's --check and total limits
+        roles = (self.actor, self.critic, self.feedback, self.train_selector, self.eval_selector, self.reward)
+        return list(dict.fromkeys(model for role in roles for model in role.params.models()))
 
     @property
     def path_suffix(self) -> str:

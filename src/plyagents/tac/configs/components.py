@@ -6,7 +6,7 @@ from dataclasses import Field, dataclass, fields
 from typing import Any, ClassVar
 
 from plybench.utils.enums import ExtendedEnum
-from plyllm import LLM
+from plyllm import LLM, ModelConfig
 
 from plyagents.tac.configs.model import ModelSpec
 from plyagents.tac.utils.options import read_options
@@ -32,6 +32,17 @@ class ComponentParams(ABC):
 
     def to_string(self) -> str:
         return ",".join(f"{name}={value.to_string() if isinstance(value, (ComponentConfig, ModelSpec)) else value}" for name, value in self._changed())
+
+    def models(self) -> list[ModelConfig]:
+        # every model this component calls, its nested components' included (e.g. apply=compress[model=...] of an LLM actor)
+        found: list[ModelConfig] = []
+        for field in fields(self):
+            value = getattr(self, field.name)
+            if isinstance(value, ModelSpec):
+                found.append(value.config)
+            elif isinstance(value, ComponentConfig):
+                found.extend(value.params.models())
+        return found
 
     @property
     def path_suffix(self) -> str:
