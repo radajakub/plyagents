@@ -1594,7 +1594,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "plybench", extras = ["all"], specifier = ">=4.4.0,<5" },
+    { name = "plybench", extras = ["all"], specifier = ">=4.4.1,<5" },
     { name = "plyllm", extras = ["all"], specifier = ">=1.5.0,<2" },
 ]
 
@@ -1607,7 +1607,7 @@ dev = [
 
 [[package]]
 name = "plybench"
-version = "4.4.0"
+version = "4.4.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "clankers" },
@@ -1619,9 +1619,9 @@ dependencies = [
     { name = "scipy" },
     { name = "tqdm" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/2c/4d/a34da9f3bcb3b6ed312fbd749e717ae0a126508e5f15b5e8a5e38d6c51cf/plybench-4.4.0.tar.gz", hash = "sha256:a0c37412bf9fbf4a0c33e59fdda39efedac7a77c22ac5c53f58db1673ded5c7e", size = 346797, upload-time = "2026-11-07T09:51:59.528Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f2/b4/bfd9b99a238883857873a74a7e49ac8bebf26e751ef198738db5f3bc8eb5/plybench-4.4.1.tar.gz", hash = "sha256:ae0cf8980ee2f6e70f3eb1fe8886d7e2a00f9a19524ee99ccddce78e12d1a8b0", size = 346797, upload-time = "2026-11-07T10:02:28.901Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/34/6b/a8e8d061e2d4de0b9b859b948396cd0b55fc3cc8d8b776e4ccdc81f4a296/plybench-4.4.0-py3-none-any.whl", hash = "sha256:972572c6909f96c931b2fe1f090edf8bc32e491b4c20ce5f8d0d89852e7cc0f1", size = 187248, upload-time = "2026-11-07T09:51:58Z" },
+    { url = "https://files.pythonhosted.org/packages/45/a4/f8b88ee713952c999df764270891e6e6d984cfef6df4e0ef0a5e9ad1c4f8/plybench-4.4.1-py3-none-any.whl", hash = "sha256:8c3aae610d1fe44c013fc8af35c1324cf0129d0b901f16ad99d1ad5a30bfd4e7", size = 187250, upload-time = "2026-11-07T10:02:26.765Z" },
 ]
 
 [package.optional-dependencies]
@@ -1632,15 +1632,15 @@ all = [
 
 [[package]]
 name = "plyllm"
-version = "1.5.0"
+version = "1.6.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
     { name = "python-dotenv" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c9/80/1d6266f2c9fbf251e2352642546c47e59ef8bc356ac895ffae8283a0886e/plyllm-1.5.0.tar.gz", hash = "sha256:d11e2287404d33cfc1019764a16e6caf6b44396ce8ce132238040f0a122c658e", size = 246398, upload-time = "2026-11-03T08:24:02.728Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/6d/78/736e0af967cd92600b9d3eda27a982e88e01ece7426999cd3dca25d8da47/plyllm-1.6.0.tar.gz", hash = "sha256:599526288ed11f72b73019fc1df711ad7d26e4f66063d02d3bd3570ee53e7fab", size = 247412, upload-time = "2026-11-07T09:58:29.407Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f2/2a/cba858143ab132837882268309254a5659a15fd8823c1ae038d9a3831194/plyllm-1.5.0-py3-none-any.whl", hash = "sha256:88799f512555d5ea6f7fb12f3a80feb3b61bdf7dae0e16eeb7e1cd8266a5c035", size = 88676, upload-time = "2026-11-03T08:24:01.425Z" },
+    { url = "https://files.pythonhosted.org/packages/e5/34/538613ed0a65cc4c81ddd206728f5f9d538600d305ff1103d80a42236e69/plyllm-1.6.0-py3-none-any.whl", hash = "sha256:c52e56cfab46e48e4763a596b780a537b6e6db94527b753b1a996a5a21d14c24", size = 93043, upload-time = "2026-11-07T09:58:27.832Z" },
 ]
 
 [package.optional-dependencies]
