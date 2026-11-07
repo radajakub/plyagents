@@ -67,3 +67,22 @@ def test_a_long_suffix_keeps_its_start_and_a_hash_of_the_whole():
     assert other[:-HASH_LENGTH] == suffix[:-HASH_LENGTH] and other != suffix
     # a short one is kept whole
     assert TACParams.from_string("actor=tabular").path_suffix == "actor-tabular"
+
+
+@pytest.mark.parametrize(
+    ("spec", "name"),
+    [
+        (
+            "actor=llm[model=gemini:gemini-3.5-flash-lite[thinking_enabled=True],budget=600],critic=oracle,feedback=oracle",
+            "TAC: LLM actor, oracle critic, oracle feedback (gemini-3.5-flash-lite)",
+        ),
+        ("actor=tabular[target=critic],critic=tabular,train_selector=eps_greedy[eps=0.3]", "TAC: tabular actor, tabular critic, no feedback"),
+        (
+            "actor=llm[model=gemini:gemini-3.5-flash-lite],critic=llm[model=metacentrum:gpt-oss-120b]",
+            "TAC: LLM actor (gemini-3.5-flash-lite), LLM critic (gpt-oss-120b), no feedback",
+        ),
+    ],
+)
+def test_the_display_name_is_tac_and_its_components(spec, name):
+    # the model once when the LLM components share it, else after each; params, selectors, reward and key left out
+    assert TACParams.from_string(spec).display_name() == name

@@ -9,10 +9,13 @@ from plybench.configs.player_params import CheckpointedParams
 from plybench.utils.text import to_bool
 
 from plyagents.tac.actors.build import ACTORS
+from plyagents.tac.actors.llm import LLMActorParams
 from plyagents.tac.configs.components import ComponentConfig
 from plyagents.tac.critics.build import CRITICS
+from plyagents.tac.critics.llm import LLMCriticParams
 from plyagents.tac.enums import ActorType, CriticType, FeedbackType, RewardType, SelectorType
 from plyagents.tac.feedback.build import FEEDBACKS
+from plyagents.tac.feedback.llm import LLMFeedbackParams
 from plyagents.tac.rewards.build import REWARDS
 from plyagents.tac.selectors.build import SELECTORS
 from plyagents.tac.utils.options import read_options
@@ -81,6 +84,19 @@ class TACParams(CheckpointedParams):
         if self.checkpoint_path is not None:
             options.append(f"checkpoint={self.checkpoint_path}")
         return ",".join(options)
+
+    def display_name(self) -> str | None:
+        # for plots: TAC and its actor, critic and feedback by type, e.g. "TAC: LLM actor, oracle critic, oracle feedback (gemini-3.5-flash-lite)"; the
+        # model once when every LLM component calls the same one, else after each. Selectors, reward, key and the components' params are left out
+        roles = [("actor", self.actor), ("critic", self.critic), ("feedback", self.feedback)]
+        models = {role: config.params.model if isinstance(config.params, (LLMActorParams, LLMCriticParams, LLMFeedbackParams)) else None for role, config in roles}
+        names = {model.config.model_name for model in models.values() if model is not None}
+        parts = []
+        for role, config in roles:
+            kind = {"none": "no", "llm": "LLM"}.get(str(config.kind.value), str(config.kind.value))
+            model = models[role]
+            parts.append(f"{kind} {role}" + (f" ({model.config.model_name})" if len(names) > 1 and model is not None else ""))
+        return f"TAC: {', '.join(parts)}" + (f" ({names.pop()})" if len(names) == 1 else "")
 
     @property
     def path_suffix(self) -> str:
