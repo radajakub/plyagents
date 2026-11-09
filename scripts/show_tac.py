@@ -7,6 +7,7 @@ Sections (--show, default summary moves):
     memory   per checkpoint: the entries of each component's memory that changed since the previous checkpoint
     games    per game: the actor's key, the memory it read, its reasoning and move against the solver's, the feedback, the memory
              writes, the critic's assessments and a summary of the learner's LLM calls
+    feedback per situation: the grades of the feedback model on the training moves, split by whether the solver calls the move optimal
 
 Examples:
     uv run python scripts/show_tac.py --experiment tac_monty_hall
@@ -37,9 +38,10 @@ from plybench.harness.training.training import TrainingHarness
 from plybench.player.learnable import LEARNER_CALLS
 from plybench.trackers.result_tracker import ResultTracker
 
+from plyagents.tac.model.feedback import GRADES
 from plyagents.tac.player import STATE_FILE, UPDATE_FILE
 
-SECTIONS = ("summary", "moves", "memory", "games")
+SECTIONS = ("summary", "moves", "memory", "games", "feedback")
 SUMMARY_METRICS = (MetricName.WIN_RATE, MetricName.OPTIMALITY_RATE_NON_TRIVIAL, MetricName.FAIL_RATE)
 
 
@@ -274,12 +276,46 @@ def show_games(
                         print(f"    learner: {call_summary(calls)}")
 
 
+def show_feedback(harness: TrainingHarness, results: TrainingResults, run: TrainingRun, replayer: TurnBasedReplayer, epochs: list[int], limit: int | None) -> None:
+    print("== Feedback grades against the solver (training games; agree: good or strong on an optimal move, mistake or dubious on another)")
+    # key -> whether the solver calls the move optimal -> grade counts, keys in the order of first visit
+    counts: dict[str, dict[bool, Counter[str]]] = defaultdict(lambda: defaultdict(Counter))
+    for epoch, trackers in phase_trackers(results, run, "train").items():
+        if epoch not in epochs:
+            continue
+        for tracker in trackers:
+            for round_, steps in replay(replayer, tracker):
+                path = harness.path_builder.learner_dir(harness.experiment, run, epoch) / f"game_{round_}" / UPDATE_FILE
+                verdicts = (json.loads(path.read_text()).get("actor") or {}).get("feedback", []) if path.exists() else []
+                for index, replayed in enumerate(steps):
+                    key = (replayed.step.data or {}).get("key", replayed.step.observation)
+                    grade = (verdicts[index].get("grade") if index < len(verdicts) else None) or "none"
+                    counts[key][replayed.is_optimal][grade] += 1
+    grade_table(counts, limit)
+
+
+def grade_table(counts: dict[str, dict[bool, Counter[str]]], limit: int | None) -> None:
+    # per key: the grades given to optimal moves and to other moves, and the share that agrees with the solver; also used by reask_feedback.py
+    columns = (*GRADES, "none")
+    for key, by_optimal in counts.items():
+        print(f"   {cut(key, limit)}")
+        print(f"     {'move':<12}" + "".join(f"{grade:>9}" for grade in columns) + f"{'agree':>9}")
+        for optimal in (True, False):
+            counter = by_optimal.get(optimal)
+            if not counter:
+                continue
+            agreeing = ("good", "strong") if optimal else ("mistake", "dubious")
+            share = sum(counter[grade] for grade in agreeing) / sum(counter.values())
+            label = "optimal" if optimal else "not optimal"
+            print(f"     {label:<12}" + "".join(f"{counter.get(grade, 0) or '':>9}" for grade in columns) + f"{share:>9.2f}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     add_training_source_args(parser)
     parser.add_argument("--show", nargs="+", choices=SECTIONS, default=["summary", "moves"], help="sections to print (default summary moves)")
     parser.add_argument("--phase", choices=("train", "test"), help="the games the moves and games sections read (default: test for moves, train for games)")
-    parser.add_argument("--epochs", nargs="+", type=int, help="epochs for the memory and games sections (default: all)")
+    parser.add_argument("--epochs", nargs="+", type=int, help="epochs for the memory, games and feedback sections (default: all)")
     parser.add_argument("--rounds", nargs="+", type=int, help="game rounds for the games section (default: all)")
     parser.add_argument("--top", type=int, default=20, help="situations in the moves section, most visited first (default 20)")
     parser.add_argument("--all-entries", action="store_true", help="memory section: print unchanged entries too")
@@ -310,6 +346,8 @@ def main() -> None:
             show_memory(harness, run, epochs, args.all_entries, limit)
         if "games" in args.show:
             show_games(harness, results, run, replayer, args.phase or "train", [epoch for epoch in epochs if epoch > 0 or args.phase == "test"], args.rounds, limit)
+        if "feedback" in args.show:
+            show_feedback(harness, results, run, replayer, epochs, limit)
 
 
 if __name__ == "__main__":
