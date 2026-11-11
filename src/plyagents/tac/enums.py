@@ -39,6 +39,7 @@ class TargetType(ExtendedEnum):
 
 class SchedulerType(ExtendedEnum):
     CONSTANT = "constant"
+    HARMONIC = "harmonic"
 
 
 class ApplyType(ExtendedEnum):
@@ -46,10 +47,27 @@ class ApplyType(ExtendedEnum):
     COMPRESS = "compress"
 
 
+class ExploreLevel(ExtendedEnum):
+    # the exploration instruction in the LLM actor's prompt in training: none, a generic one, or one that points to its notes and knowledge
+    OFF = "off"
+    GENERIC = "generic"
+    MEMORY = "memory"
+
+
+class CountsLevel(ExtendedEnum):
+    # what the LLM actor is shown of the reference counts at its key: nothing; the counts in training; the counts and a request to try rare
+    # actions in training; the counts and mean outcomes, in training and evaluation (the statistics as the context, H-stats)
+    OFF = "off"
+    COUNTS = "counts"
+    REQUEST = "request"
+    STATS = "stats"
+
+
 class FeedbackType(ExtendedEnum):
     NONE = "none"
     ORACLE = "oracle"
     LLM = "llm"
+    LOG = "log"
 
 
 class ReferenceType(ExtendedEnum):

@@ -21,10 +21,12 @@ from plyllm import LLM, LLMConfig, LLMResponse, LLMTokens
 from plyllm.response import OutputText
 
 from plyagents.tac.actors.build import ACTORS
-from plyagents.tac.actors.llm import LABEL, LLMActor
+from plyagents.tac.actors.llm import EXPLORE, LABEL, REQUEST, LLMActor, LLMActorParams, counts_text
 from plyagents.tac.apply.truncate import TruncateApply
 from plyagents.tac.configs.model import ModelSpec
+from plyagents.tac.enums import CountsLevel, ExploreLevel
 from plyagents.tac.model.assessment import Assessment
+from plyagents.tac.model.counts import MoveCounts
 from plyagents.tac.model.feedback import StepFeedback
 from plyagents.tac.model.memory import Entry, KeyedMemory
 from plyagents.tac.model.step import Situation, TACStep
@@ -61,15 +63,15 @@ class _ScriptedLLM:
         )
 
 
-def _actor(stub: _ScriptedLLM, memory: bool = True) -> LLMActor:
-    return LLMActor(cast(LLM, stub), MODEL, ObservationType.ACTIONS, TextStrategy(), memory, None, ConstantScheduler(0.25), TruncateApply())
+def _actor(stub: _ScriptedLLM, memory: bool = True, explore: ExploreLevel = ExploreLevel.OFF, counts: CountsLevel = CountsLevel.OFF) -> LLMActor:
+    return LLMActor(cast(LLM, stub), MODEL, ObservationType.ACTIONS, TextStrategy(), memory, None, ConstantScheduler(0.25), TruncateApply(), explore, counts)
 
 
-def _situation(engine) -> Situation:
+def _situation(engine, training: bool = False, counts: dict[str, MoveCounts] | None = None) -> Situation:
     os_observation = engine.game.get_observation(0)
     observation = engine.observation_class.from_openspiel(os_observation, engine.interface_transformer)
     legal = [engine.action_class.from_openspiel(move, engine.interface_transformer) for move in engine.game.get_legal_moves(0)]
-    return Situation("start", observation, legal, [action.to_llm().string for action in legal], 0, os_observation.state, True)
+    return Situation("start", observation, legal, [action.to_llm().string for action in legal], 0, os_observation.state, True, training, counts or {})
 
 
 def test_with_an_empty_memory_the_prompt_is_the_llm_players(tic_tac_toe):
@@ -120,6 +122,63 @@ def test_propose_writes_the_lessons_and_commit_applies_them(calls):
     actor.commit(update)
     assert actor.memory.get("z") == Entry("take the centre", 1, {"<C2R2>": 1}, 1)
     assert actor.memory.get("y").visits == 1 and actor.memory.get("y").text == ""
+
+
+def _played(n: int, wins: int) -> MoveCounts:
+    counts = MoveCounts()
+    for game in range(n):
+        counts = counts.plus(1.0 if game < wins else -1.0)
+    return counts
+
+
+def test_the_counts_text_lists_the_tried_actions_in_legal_order_then_the_untried():
+    counts = {"<b>": _played(3, 2), "<a>": _played(1, 1)}
+    actions = ["<a>", "<b>", "<c>", "<d>"]
+    assert counts_text(actions, counts, stats=False) == "Tried here before: <a> (once), <b> (3 times). Not tried yet: <c>, <d>."
+    assert counts_text(actions, counts, stats=True) == "Results here so far: <a>: tried once, mean outcome +1.00; <b>: tried 3 times, mean outcome +0.33. Not tried yet: <c>, <d>."
+    assert counts_text(actions, {}, stats=False) == "Not tried yet: <a>, <b>, <c>, <d>."
+
+
+def test_in_training_the_counts_the_request_and_the_instruction_follow_the_notes(tic_tac_toe):
+    stub = _ScriptedLLM()
+    actor = _actor(stub, explore=ExploreLevel.MEMORY, counts=CountsLevel.REQUEST)
+    actor.initialize(tic_tac_toe.game, tic_tac_toe.prompt_adapter)
+    actor.memory = KeyedMemory({"start": Entry("take the centre")})
+    output = asyncio.run(actor.act(_situation(tic_tac_toe, training=True, counts={"<C2R2>": _played(2, 1)}), Greedy(), np.random.default_rng(0)))
+
+    prompt = stub.prompts[0]
+    notes, counts = prompt.index(f"{LABEL}\ntake the centre"), prompt.index("Tried here before: <C2R2> (2 times).")
+    assert notes < counts < prompt.index(REQUEST) < prompt.index(EXPLORE[ExploreLevel.MEMORY]) < prompt.index("legal moves are")
+    # the step's context is what was read from the memory, as the feedback is shown it; the guidance is kept beside it
+    data = output.data or {}
+    assert data["context"] == f"{LABEL}\ntake the centre" and data["guidance"].startswith("Tried here before:") and data["guidance"].endswith(EXPLORE[ExploreLevel.MEMORY])
+
+
+def test_in_evaluation_only_the_statistics_are_shown(tic_tac_toe):
+    for counts, shown in ((CountsLevel.COUNTS, False), (CountsLevel.REQUEST, False), (CountsLevel.STATS, True)):
+        stub, reference = _ScriptedLLM(), _ScriptedLLM()
+        actor = _actor(stub, explore=ExploreLevel.GENERIC, counts=counts)
+        actor.initialize(tic_tac_toe.game, tic_tac_toe.prompt_adapter)
+        situation = _situation(tic_tac_toe, training=False, counts={"<C2R2>": _played(2, 1)})
+        output = asyncio.run(actor.act(situation, Greedy(), np.random.default_rng(0)))
+        assert EXPLORE[ExploreLevel.GENERIC] not in stub.prompts[0] and REQUEST not in stub.prompts[0]
+        assert ("Results here so far: <C2R2>: tried 2 times, mean outcome +0.00." in stub.prompts[0]) == shown
+        if not shown:
+            # nothing is added: the prompt is the llm player's, as with every option off
+            adapter = tic_tac_toe.prompt_adapter.for_observation_type(actor.observation)
+            asyncio.run(LLMPlayer.move(cast(LLM, reference), MODEL.config, adapter, TextStrategy(), situation.observation, situation.legal, label="llm"))
+            assert stub.prompts == reference.prompts and "guidance" not in (output.data or {})
+
+
+def test_the_new_options_leave_existing_configs_unchanged_and_round_trip():
+    plain = "llm[model=metacentrum:gpt-oss-120b,budget=400]"
+    assert ACTORS.config(plain).to_string() == plain and ACTORS.config(plain).path_suffix == ACTORS.config(plain).path_suffix
+    config = ACTORS.config("llm[model=metacentrum:gpt-oss-120b,memory=False,explore=memory,counts=stats]")
+    params = config.params
+    assert isinstance(params, LLMActorParams) and params.explore is ExploreLevel.MEMORY and params.counts is CountsLevel.STATS
+    assert ACTORS.config(config.to_string()) == config and config.path_suffix != ACTORS.config("llm[model=metacentrum:gpt-oss-120b,memory=False]").path_suffix
+    with pytest.raises(ValueError, match="Invalid explore or counts"):
+        ACTORS.config("llm[model=metacentrum:gpt-oss-120b,counts=often]")
 
 
 def test_the_collection_builds_the_llm_actor_and_needs_a_model(services):
@@ -218,3 +277,57 @@ def test_a_resumed_run_with_oracle_components_lands_on_the_same_state(tmp_path, 
         asyncio.run(resumed.run(sync=True))
     asyncio.run(resumed.run(sync=True))
     assert _outputs(resumed) == expected
+
+
+def _bandit_prompts(tmp_path, monkeypatch, actor: str) -> list[str]:
+    # the scripted LLM presses the first button (red) every time; 2 epochs of 3 training games and 2 test games, played in order
+    monkeypatch.chdir(tmp_path)
+    stub = _ScriptedLLM()
+    op = PlyBench(LLMConfig())
+    register_players(op.registry, cast(LLM, stub))
+    harness = TrainingHarness(
+        "tac_bandit", op, ["bandit:rules=hidden"], [f"tac:actor={actor}"], ["none:"], ["none:"], ["num_epochs=2,num_training_games=3,num_test_games=2"], 1, seed=0
+    )
+    asyncio.run(harness.run(sync=True))
+    return stub.prompts
+
+
+def _red(prompt: str) -> int:
+    # how often the prompt says red was pressed; 0 when it lists no result
+    match = re.search(r"<button:red>(?:: tried | \()(once|\d+ times)", prompt)
+    return 0 if match is None else 1 if match.group(1) == "once" else int(match.group(1).split()[0])
+
+
+def test_the_statistics_shown_at_each_game_are_the_training_games_before_it(tmp_path, monkeypatch):
+    # H-stats: no memory, the statistics as the context, in training and in the test games; the test games add nothing to the counts
+    prompts = _bandit_prompts(tmp_path, monkeypatch, "llm[model=metacentrum:gpt-oss-120b,memory=False,counts=stats]")
+    # epoch 0: 2 tests; epoch 1: 3 training, 2 tests; epoch 2: 3 training, 2 tests
+    assert [_red(prompt) for prompt in prompts] == [0, 0, 0, 1, 2, 3, 3, 3, 4, 5, 6, 6]
+    assert "Not tried yet: <button:red>, <button:blue>" in prompts[0] and "Not tried yet: <button:blue>, <button:green>" in prompts[-1]
+    assert LABEL not in "".join(prompts)
+
+
+def test_the_counts_and_the_instruction_are_shown_only_in_training(tmp_path, monkeypatch):
+    prompts = _bandit_prompts(tmp_path, monkeypatch, "llm[model=metacentrum:gpt-oss-120b,explore=generic,counts=counts]")
+    # epoch 0: tests 0-1; epoch 1: training 2-4, tests 5-6; epoch 2: training 7-9, tests 10-11
+    training = [2, 3, 4, 7, 8, 9]
+    for index, prompt in enumerate(prompts):
+        assert (EXPLORE[ExploreLevel.GENERIC] in prompt) == (index in training) and ("Not tried yet:" in prompt) == (index in training)
+    assert [_red(prompts[index]) for index in training] == [0, 1, 2, 3, 4, 5]
+
+
+def test_the_log_feedback_makes_the_entry_the_history_in_order(tmp_path, monkeypatch):
+    # H-raw: the actor reads the log of its earlier presses; after t training games its entry has t lines, in order
+    monkeypatch.chdir(tmp_path)
+    stub = _ScriptedLLM()
+    op = PlyBench(LLMConfig())
+    register_players(op.registry, cast(LLM, stub))
+    spec = "tac:actor=llm[model=metacentrum:gpt-oss-120b],feedback=log"
+    harness = TrainingHarness("tac_bandit", op, ["bandit:rules=hidden"], [spec], ["none:"], ["none:"], ["num_epochs=2,num_training_games=3,num_test_games=2"], 1, seed=0)
+    asyncio.run(harness.run(sync=True))
+    state = json.loads((harness.path_builder.checkpoint(harness.experiment, harness.runs[0], 2) / "state.json").read_text())
+    (entry,) = state["actor"].values()
+    lines = entry["text"].split("\n")
+    assert len(lines) == 6 and all(re.fullmatch(r"Played <button:red>: (win|loss)\.", line) for line in lines)
+    # the last training game read the five lines before it; no call besides the actor's
+    assert stub.prompts[9].count("Played <button:red>") == 5 and len(stub.prompts) == 12

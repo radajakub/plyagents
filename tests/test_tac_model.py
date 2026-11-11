@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 
+from plyagents.tac.model.counts import MoveCounts
 from plyagents.tac.model.feedback import StepFeedback
-from plyagents.tac.model.reference import MoveCounts, Reference, ReferenceStep, ReferenceUpdate, Values
+from plyagents.tac.model.reference import Reference, ReferenceStep, ReferenceUpdate, Values
 from plyagents.tac.model.step import TACStep
 from plyagents.tac.model.table import Sample, Table, TableUpdate
 from plyagents.tac.model.update import TACUpdate

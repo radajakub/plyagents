@@ -17,7 +17,8 @@ from plyllm import LLMConfig
 
 from plyagents.tac import build
 from plyagents.tac.critics.oracle import OracleCritic
-from plyagents.tac.model.reference import MoveCounts, Reference
+from plyagents.tac.model.counts import MoveCounts
+from plyagents.tac.model.reference import Reference
 from plyagents.tac.model.step import TACStep
 from plyagents.tac.params import TACParams
 from plyagents.tac.player import TACPlayer
@@ -264,3 +265,21 @@ def test_the_solved_values_are_recorded_only_when_asked_for_and_the_game_is_solv
     connect_four = registry.build_engine(registry.game_config("connect_four:")).game
     unsolvable = registry.build_player(connect_four, registry.player_config("tac:actor=tabular"), "i")
     assert isinstance(unsolvable, TACPlayer) and not unsolvable.solved
+
+
+def test_ucb_with_sample_means_finds_the_best_button_of_a_bandit(tmp_path, monkeypatch):
+    # the classical baseline of the exploration experiment: UCB1 (c = 2 sqrt 2 for rewards in [-1, 1]) over sample means; the best button (purple with
+    # shift 4, wins 3/4 against 1/4) takes most presses, and the actor's estimates are the mean outcomes of the reference counts
+    monkeypatch.chdir(tmp_path)
+    player = "tac:actor=tabular[scheduler=harmonic],train_selector=ucb[c=2.83]"
+    harness = TrainingHarness("bandit", op, ["bandit:shift=4,rules=hidden"], [player], ["none:"], ["none:"], ["num_epochs=2,num_training_games=100,num_test_games=5"], 1, seed=0)
+    asyncio.run(harness.run(sync=True))
+    run = harness.runs[0]
+    state = json.loads((harness.path_builder.checkpoint(harness.experiment, run, 2) / "state.json").read_text())
+    (counts,) = Reference.from_dict(state["reference"]).counts.values()
+    assert sum(moves.visits for moves in counts.values()) == 200
+    best = counts["<button:purple>"]
+    assert best.visits > 0.6 * 200 and all(moves.visits < best.visits for move, moves in counts.items() if move != "<button:purple>")
+    (table,) = state["actor"].values()
+    for move, moves in counts.items():
+        assert table[move]["count"] == moves.visits and abs(table[move]["value"] - moves.total / moves.visits) < 1e-9

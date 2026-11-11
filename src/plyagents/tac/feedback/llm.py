@@ -4,14 +4,15 @@ from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from plybench.utils.text import to_bool
 from pydantic import BaseModel
 
 from plyagents.tac.configs.components import ComponentParams
 from plyagents.tac.configs.model import ModelSpec
 from plyagents.tac.feedback.base import Feedback
 from plyagents.tac.model.assessment import Assessment
+from plyagents.tac.model.counts import KeyCounts
 from plyagents.tac.model.feedback import GRADES, Grade, StepFeedback
-from plyagents.tac.model.reference import KeyCounts
 from plyagents.tac.model.step import TACStep
 from plyagents.tac.utils.calls import Calls
 from plyagents.tac.utils.options import read_options
@@ -26,10 +27,12 @@ PROMPT = """The agent's moves, in order. Each shows the situation as the agent s
 
 Outcome for the agent: {outcome:+g} (+1 is a win, 0 a draw, -1 a loss).
 
-For every move give its step number, a grade ({grades}) and a short reason. Where the agent should play differently next time, or keep playing the same, add a lesson: one or two sentences it can act on when it meets this situation again{limit}.{critic}"""
+For every move give its step number, a grade ({grades}) and a short reason. Where the agent should play differently next time, or keep playing the same, add a lesson: one or two sentences it can act on when it meets this situation again{limit}.{track}{critic}"""
 CRITIC = " Where the value estimate of a move was wrong, add a critic note: what the position was really worth, and why."
 # with the Q critic, whose text assesses every legal move
 CRITIC_Q = " Where the critic's assessment of the move played was wrong, add a critic note: what that move was really worth here, and why."
+# with `track` (the exploration experiment's T-text): the lessons keep what was tried and how sure they are, so the actor can judge what is still uncertain
+TRACK = " In each lesson, also keep track of which moves were tried in this situation and how sure the lesson is."
 HISTORY = "What the agent's earlier games showed in these situations (the moves it played there and how those games ended):"
 
 # what F is shown besides the moves and the outcome, each a block in a fixed format; in the order of the information ladder
@@ -90,14 +93,17 @@ class LLMFeedbackParams(ComponentParams):
     lesson_chars: int | None = None
     # what F is shown besides the moves and the outcome (INPUTS), joined by +; "none" for nothing
     inputs: str = "value"
+    # asks the lessons to keep track of the moves tried and how sure they are (TRACK)
+    track: bool = False
 
     @classmethod
     def from_string(cls, params_string: str) -> LLMFeedbackParams:
-        options = read_options(params_string, {"model", "lesson_chars", "inputs"}, "llm feedback")
+        options = read_options(params_string, {"model", "lesson_chars", "inputs", "track"}, "llm feedback")
         return cls(
             ModelSpec.from_string(options["model"]) if "model" in options else None,
             int(options["lesson_chars"]) if "lesson_chars" in options else None,
             read_inputs(options.get("inputs", cls.inputs)),
+            to_bool(options.get("track", False)),
         )
 
     @property
@@ -109,10 +115,11 @@ class LLMFeedback(Feedback):
     # F as in the paper: one call per game, the moves numbered, the outcome and what its inputs name shown; it answers per step
     # number (keys are long, the model never copies them). A step it leaves out gets no feedback. The history is the player's
     # counts before this game, so F keeps no state of its own
-    def __init__(self, model: ModelSpec, lesson_chars: int | None, inputs: set[str] | None = None) -> None:
+    def __init__(self, model: ModelSpec, lesson_chars: int | None, inputs: set[str] | None = None, track: bool = False) -> None:
         self.model = model
         self.lesson_chars = lesson_chars
         self.inputs = {"value"} if inputs is None else inputs
+        self.track = track
 
     @staticmethod
     def system(steps: list[TACStep]) -> str:
@@ -170,6 +177,7 @@ class LLMFeedback(Feedback):
             outcome=outcome,
             grades=", ".join(GRADES),
             limit=f", at most {self.lesson_chars} characters" if self.lesson_chars is not None else "",
+            track=TRACK if self.track else "",
             critic=(CRITIC_Q if moves else CRITIC) if estimated else "",
         )
 
@@ -186,4 +194,5 @@ class LLMFeedback(Feedback):
     def describe(self) -> str:
         limit = f", lessons of at most {self.lesson_chars} characters" if self.lesson_chars is not None else ""
         shown = "+".join(name for name in INPUTS if name in self.inputs) or NO_INPUTS
-        return f"{self.model.to_string()} grades every move of the game in one call, shown {shown}{limit}"
+        track = ", lessons keep track of the moves tried" if self.track else ""
+        return f"{self.model.to_string()} grades every move of the game in one call, shown {shown}{limit}{track}"

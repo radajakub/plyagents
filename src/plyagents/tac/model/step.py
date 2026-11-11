@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from plybench.core.interface import InterfaceAction, InterfaceObservation
 from plybench.trackers.step_data import StepData
+
+from plyagents.tac.model.counts import KeyCounts
 
 
 @dataclass(frozen=True)
@@ -47,7 +49,8 @@ class TACStep:
 @dataclass(frozen=True)
 class Situation:
     # what an actor sees when it moves: the key, the observation, the legal actions and their transformed strings (aligned),
-    # the privileged true state for the oracle, and whether the game is seeded (an LLM call then carries a seed)
+    # the privileged true state for the oracle, whether the game is seeded (an LLM call then carries a seed), whether the player is training,
+    # and the counts of the moves at the key from the training games before this one (the player's reference)
     key: str
     observation: InterfaceObservation
     legal: list[InterfaceAction]
@@ -55,3 +58,5 @@ class Situation:
     player: int
     os_state: str
     seeded: bool
+    training: bool = False
+    counts: KeyCounts = field(default_factory=dict)

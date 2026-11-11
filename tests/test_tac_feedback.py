@@ -12,7 +12,8 @@ from plybench.registry import Registry
 
 from plyagents.tac.configs.model import ModelSpec
 from plyagents.tac.feedback.build import FEEDBACKS
-from plyagents.tac.feedback.llm import LLMFeedback, LLMFeedbackParams
+from plyagents.tac.feedback.llm import TRACK, LLMFeedback, LLMFeedbackParams
+from plyagents.tac.feedback.log import LogFeedback
 from plyagents.tac.feedback.none import NoFeedback
 from plyagents.tac.feedback.oracle import OracleFeedback
 from plyagents.tac.model.assessment import Assessment
@@ -35,6 +36,20 @@ def _after_corner_opening(engine) -> tuple[list[str], list[int], str]:
 def test_no_feedback_gives_an_empty_verdict_per_step(calls):
     steps = [TACStep("z", "a", 0, "s"), TACStep("y", "b", 0, "t")]
     assert asyncio.run(NoFeedback().give(steps, [Assessment(None, "")] * 2, 1.0, {}, calls)) == [StepFeedback(), StepFeedback()]
+
+
+def test_the_log_writes_each_move_and_the_result_as_a_lesson_without_a_grade(calls):
+    steps = [TACStep("z", "<button:red>", 0, "s"), TACStep("y", None, 0, "t")]
+    verdicts = asyncio.run(LogFeedback().give(steps, [Assessment(None, "")] * 2, -1.0, {}, calls))
+    assert verdicts == [StepFeedback(lesson="Played <button:red>: loss."), StepFeedback(lesson="Played no valid move: loss.")]
+
+
+def test_track_adds_one_sentence_to_the_request_and_nothing_else():
+    steps, assessments = _monty_steps(), [Assessment(0.0, "value +0"), Assessment(-1.0, "value -1")]
+    plain, tracked = LLMFeedback(MODEL, 200).prompt(steps, assessments, -1.0, {}), LLMFeedback(MODEL, 200, track=True).prompt(steps, assessments, -1.0, {})
+    assert TRACK not in plain and tracked.replace(TRACK, "") == plain and "at most 200 characters." + TRACK in tracked
+    # off is the default and is not written, so the configs and paths of the runs so far stay as they were
+    assert LLMFeedbackParams.from_string("track=False").to_string() == "" and LLMFeedbackParams.from_string("track=True").track
 
 
 def test_the_oracle_grades_by_the_solved_game_and_names_the_best_move(tic_tac_toe, calls):
@@ -118,6 +133,7 @@ def test_without_estimates_the_llm_is_not_asked_for_critic_notes(stub_calls):
 def test_the_collection_builds_each_feedback_and_the_llm_needs_a_model(services):
     assert isinstance(FEEDBACKS.build(FEEDBACKS.config("none"), services), NoFeedback)
     assert isinstance(FEEDBACKS.build(FEEDBACKS.config("oracle"), services), OracleFeedback)
+    assert isinstance(FEEDBACKS.build(FEEDBACKS.config("log"), services), LogFeedback)
     llm = FEEDBACKS.build(FEEDBACKS.config("llm[model=metacentrum:gpt-oss-120b[reasoning_effort=low],lesson_chars=300]"), services)
     assert isinstance(llm, LLMFeedback) and llm.model == MODEL and llm.lesson_chars == 300
     with pytest.raises(ValueError, match="needs a model"):

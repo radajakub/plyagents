@@ -21,8 +21,9 @@ from plyagents.tac.configs.components import Services
 from plyagents.tac.critics.base import Critic
 from plyagents.tac.feedback.base import Feedback
 from plyagents.tac.model.assessment import Assessment
+from plyagents.tac.model.counts import KeyCounts
 from plyagents.tac.model.feedback import StepFeedback
-from plyagents.tac.model.reference import KeyCounts, Reference, ReferenceStep, ReferenceUpdate, solved_values
+from plyagents.tac.model.reference import Reference, ReferenceStep, ReferenceUpdate, solved_values
 from plyagents.tac.model.step import Situation, TACStep
 from plyagents.tac.model.update import TACUpdate
 from plyagents.tac.rewards.base import RewardShaper
@@ -92,7 +93,8 @@ class TACPlayer(LearnablePlayer[TACUpdate]):
         # build situation the actor sees
         os_observation = observation.os_observation
         actions = [action.to_llm().string for action in legal_moves]
-        situation = Situation(self.key(observation), observation, legal_moves, actions, os_observation.player, os_observation.state, self.seeded)
+        key = self.key(observation)
+        situation = Situation(key, observation, legal_moves, actions, os_observation.player, os_observation.state, self.seeded, self.mode == Mode.TRAIN, self.reference.before(key))
 
         # run the act method of the actor
         output = await self.actor.act(situation, self.selectors[self.mode], self.rng)

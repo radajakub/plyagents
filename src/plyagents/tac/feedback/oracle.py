@@ -9,8 +9,8 @@ from plybench.core.prompt_adapter import PromptAdapter
 
 from plyagents.tac.feedback.base import Feedback
 from plyagents.tac.model.assessment import Assessment
+from plyagents.tac.model.counts import KeyCounts
 from plyagents.tac.model.feedback import Grade, StepFeedback
-from plyagents.tac.model.reference import KeyCounts
 from plyagents.tac.model.step import TACStep
 from plyagents.tac.rewards.base import RewardShaper
 from plyagents.tac.rewards.result import ResultShaper

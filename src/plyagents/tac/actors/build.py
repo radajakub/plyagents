@@ -31,6 +31,8 @@ ACTORS: Collection[ActorType, Actor] = Collection(
                 params.budget,
                 SCHEDULERS.build(params.scheduler, services),
                 APPLIES.build(params.apply, services),
+                params.explore,
+                params.counts,
             ),
         ),
     },

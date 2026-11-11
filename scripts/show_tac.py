@@ -41,8 +41,8 @@ from plybench.harness.training.training import TrainingHarness
 from plybench.player.learnable import LEARNER_CALLS
 from plybench.trackers.result_tracker import ResultTracker
 
+from plyagents.tac.model.counts import MoveCounts, counts_from_dict
 from plyagents.tac.model.feedback import GRADES
-from plyagents.tac.model.reference import MoveCounts, counts_from_dict
 from plyagents.tac.player import STATE_FILE, UPDATE_FILE
 
 SECTIONS = ("summary", "moves", "memory", "games", "feedback", "reference")
