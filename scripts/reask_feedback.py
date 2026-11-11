@@ -18,6 +18,8 @@ The levels from L2 on are asked once per critic (--critics): tabular (Monte Carl
 were played, so each call sees only the games before it) and oracle (V* and Q* of the solved game: the bound, privileged). --no-q leaves L3 out and q
 out of L4 and L5.
     obfuscated  L0 with the game renamed (doors to boxes, the host to an operator, the car to a prize): no cue of the known puzzle
+--inputs asks explicit sets of inputs (as the feedback's inputs=..., e.g. memory+history) besides the ladder; a set without delta and q is asked
+with no critic and named <inputs>_nocritic (the text-only runs: no number from another method in the call), one with them once per critic.
 
 --sample-seeds asks each call again with other seeds (0 is the game's own, which reproduces the recorded answers): the noise of the grades.
 
@@ -32,6 +34,7 @@ Examples:
     uv run python scripts/reask_feedback.py --experiment tac_monty_hall_ladder --trainees "<R3 config>" --out <dir> --variants --levels L0 L1 L2 L4 L5 --no-q
     uv run python scripts/reask_feedback.py --experiment tac_monty_hall_ladder --trainees "<R3 config>" --out <dir> --variants as_run --sample-seeds 1 2
     uv run python scripts/reask_feedback.py --experiment tac_monty_hall_ladder --trainees "<R3 config>" --out <dir> --levels L2 --dry-run
+    uv run python scripts/reask_feedback.py --experiment tac_monty_hall_ladder --trainees "<R3 config>" --out <dir> --variants --inputs history memory+history
     uv run python scripts/reask_feedback.py --out analysis/tac_monty_hall_ladder/reask_r3 --status
 """
 
@@ -233,14 +236,16 @@ def obfuscate(text: str) -> str:
     return text
 
 
-def level_names(levels: list[str], critics: list[str], no_q: bool) -> list[tuple[str, str, str]]:
-    # (name, inputs, critic) per level and critic, without duplicates (L3 without q is L2); the levels without the critic's numbers once, with no critic
+def level_names(levels: list[str], critics: list[str], no_q: bool, explicit: list[str] | None = None) -> list[tuple[str, str, str]]:
+    # (name, inputs, critic) per level and critic, without duplicates (L3 without q is L2); the levels without the critic's numbers once, with no critic.
+    # The explicit sets (--inputs) the same, but named <inputs>_nocritic without a critic, apart from the first round's variants (history)
     names: dict[str, tuple[str, str, str]] = {}
-    for level in levels:
-        inputs = read_inputs("+".join(name for name in LEVELS[level].split("+") if not (no_q and name == "q")))
+    sets = [("+".join(name for name in LEVELS[level].split("+") if not (no_q and name == "q")), "") for level in levels]
+    for text, suffix in sets + [(text, "_nocritic") for text in explicit or []]:
+        inputs = read_inputs(text)
         shown = LLMFeedbackParams(inputs=inputs).shown
         for critic in critics if shown & {"delta", "q"} else ["none"]:
-            name = inputs if critic == "none" else f"{inputs}_{critic}"
+            name = f"{inputs}{suffix}" if critic == "none" else f"{inputs}_{critic}"
             names.setdefault(name, (name, inputs, "none" if critic == "none" else CRITICS_OF_LEVELS[critic]))
     return list(names.values())
 
@@ -252,12 +257,12 @@ async def plan(args: argparse.Namespace, run: TrainingRun, every: list[Game], ga
     calls: dict[str, dict[tuple[int, int], tuple[str, str]]] = {}
     for variant in args.variants:
         calls[variant] = {(played.epoch, played.round): changed(played, with_calls[: with_calls.index(played)], variant) for played in asked}
-    for name, inputs, critic in level_names(args.levels, args.critics, args.no_q):
+    for name, inputs, critic in level_names(args.levels, args.critics, args.no_q, args.inputs):
         calls[name] = await rebuilt(run, every, inputs, critic, game, services)
     if args.obfuscated:
         plain = await rebuilt(run, every, "none", "none", game, services)
         calls[OBFUSCATED] = {where: (obfuscate(system), obfuscate(prompt)) for where, (system, prompt) in plain.items()}
-    problems = await rebuild_problems(run, every, game, services) if args.levels or args.obfuscated else []
+    problems = await rebuild_problems(run, every, game, services) if args.levels or args.inputs or args.obfuscated else []
     asks = [
         Ask(name if sample == 0 else f"{name}_seed{sample}", played, *calls[name][played.epoch, played.round], seed_of(played, sample))
         for name in calls
@@ -399,6 +404,9 @@ async def main() -> None:
     parser.add_argument("--critics", nargs="+", choices=list(CRITICS_OF_LEVELS), default=list(CRITICS_OF_LEVELS), help="critics of the levels from L2 (default both)")
     parser.add_argument("--no-q", action="store_true", help="leave the critic's values of the other moves out of the levels (L3 is then L2)")
     parser.add_argument("--obfuscated", action="store_true", help="also ask L0 with the game renamed")
+    parser.add_argument(
+        "--inputs", nargs="+", default=[], help="explicit sets of the feedback's inputs (e.g. memory+history), asked as a level; without delta and q with no critic"
+    )
     parser.add_argument("--sample-seeds", nargs="+", type=int, default=[0], help="seeds to ask each call with: 0 the game's own, others derived from it (default 0)")
     parser.add_argument("--epochs", nargs="+", type=int, help="epochs whose training games are asked again (default: all); the history and the critic still see every earlier game")
     parser.add_argument("--concurrency", type=int, default=10, help="requests in flight per provider (default 10)")
@@ -414,8 +422,8 @@ async def main() -> None:
     if args.status:
         print(json.dumps(status(args.out)))
         return
-    if not (args.variants or args.levels or args.obfuscated):
-        raise SystemExit("nothing to ask: name --variants, --levels or --obfuscated")
+    if not (args.variants or args.levels or args.inputs or args.obfuscated):
+        raise SystemExit("nothing to ask: name --variants, --levels, --inputs or --obfuscated")
     op = build_op(concurrency=args.concurrency)
     services = Services(op.llm, op.registry.solvable)
     harness = training_from_args(op, args)
