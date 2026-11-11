@@ -11,25 +11,37 @@ Sections (--show, default summary moves):
     reference per epoch and situation: the counts the player recorded beside the text (visits, share, mean outcome and its spread per move,
              Q* where solved) and how often the feedback's grade has the sign of the counted advantage (mean outcome of the move minus that of
              the situation, from the counts before the game) and agrees with the solver (Q* = V*)
+    regret   across runs: the runs that differ only in a bandit's shift are replicates of one condition. Per condition the cumulative
+             regret over the training games (the sum of V* - Q*(a) of the moves played, as in the bandit literature's pseudo-regret), the
+             share of optimal games among the last 25, the moves tried, the runs that never play optimally in the second half (suffix
+             failures), and the test games' regret per epoch (V* - V of the memory's policy, without exploration); means with 95% bootstrap
+             intervals over the runs. --plot <png> draws the cumulative regret and the test regret
 
 Examples:
     uv run python scripts/show_tac.py --experiment tac_monty_hall
     uv run python scripts/show_tac.py --experiment tac_monty_hall --show memory --epochs 3 4
     uv run python scripts/show_tac.py --experiment tac_monty_hall --show games --epochs 4 --rounds 1 2 --full
     uv run python scripts/show_tac.py --experiment tac_monty_hall --show games --phase test --epochs 5
+    uv run python scripts/show_tac.py --experiment tac_bandit --show regret --plot plots/tac_bandit/regret.png
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 from collections import Counter, defaultdict
+from dataclasses import dataclass, field
+from pathlib import Path
+from statistics import mean
 from typing import Any
 
 from plybench.analysis.replay import ReplayedStep, TurnBasedReplayer, build_replayer
 from plybench.analysis.statistics.bundle import CIBundle
+from plybench.analysis.statistics.distribution import Distribution
+from plybench.analysis.statistics.intervals import bootstrap_ci
 from plybench.analysis.training import TrainingAnalysis
-from plybench.analysis.visual import game_title, player_label
+from plybench.analysis.visual import CATEGORICAL, Axis, BaselineLayer, Figure, Layer, LineLayer, Panel, StyleOverride, game_title, player_label, render
 from plybench.app import PlyBench
 from plybench.cli.shared import add_training_source_args, build_op, training_from_args
 from plybench.common.enums import GameResults, MetricName
@@ -45,7 +57,9 @@ from plyagents.tac.model.counts import MoveCounts, counts_from_dict
 from plyagents.tac.model.feedback import GRADES
 from plyagents.tac.player import STATE_FILE, UPDATE_FILE
 
-SECTIONS = ("summary", "moves", "memory", "games", "feedback", "reference")
+SECTIONS = ("summary", "moves", "memory", "games", "feedback", "reference", "regret")
+# the training games at the end of a run whose share of optimal games is reported
+LAST_GAMES = 25
 SUMMARY_METRICS = (MetricName.WIN_RATE, MetricName.OPTIMALITY_RATE_NON_TRIVIAL, MetricName.FAIL_RATE)
 
 
@@ -369,6 +383,138 @@ def show_reference(harness: TrainingHarness, run: TrainingRun, epochs: list[int]
                 print(f"     feedback: {counted['graded']} graded this epoch; agrees with the counted advantage's sign and with the solver: {', '.join(shares)}")
 
 
+@dataclass
+class RunRegret:
+    # one run's regret per game: the training games in the order played, the test games per epoch; a game's regret is the sum of its steps'
+    train: list[float] = field(default_factory=list)
+    train_optimal: list[bool] = field(default_factory=list)
+    moves: set[str] = field(default_factory=set)
+    test: dict[int, list[float]] = field(default_factory=lambda: defaultdict(list))
+
+
+def replicate_group(run: TrainingRun) -> tuple[str, str]:
+    # the shift of a bandit moves the best button, not the problem: runs that differ only in it are replicates of one condition
+    return re.sub(r",shift=\d+", "", run.game.to_string()), run.trainee.to_string()
+
+
+def run_regret(results: TrainingResults, run: TrainingRun, replayer: TurnBasedReplayer) -> RunRegret:
+    regret = RunRegret()
+    for _, trackers in sorted(phase_trackers(results, run, "train").items()):
+        for tracker in trackers:
+            for _, steps in replay(replayer, tracker):
+                regret.train.append(sum(replayed.regret for replayed in steps))
+                regret.train_optimal.append(all(replayed.is_optimal for replayed in steps))
+                regret.moves |= {replayed.step.move for replayed in steps}
+    for epoch, trackers in phase_trackers(results, run, "test").items():
+        for tracker in trackers:
+            regret.test[epoch] += [sum(replayed.regret for replayed in steps) for _, steps in replay(replayer, tracker)]
+    return regret
+
+
+def uniform_regret(op: PlyBench, run: TrainingRun, replayer: TurnBasedReplayer) -> float | None:
+    # the regret per game of the uniform policy at the first decision, exact (all of it in a one-decision game such as the bandit); None when chance moves first
+    engine = op.registry.build_engine(run.game)
+    engine.reset()
+    if engine.game.is_chance_node():
+        return None
+    pid = engine.game.get_player()
+    legal = [engine.action_class.from_openspiel(move, engine.interface_transformer) for move in engine.game.get_legal_moves(pid)]
+    _, _, verdict = replayer.probe(engine.game.serialize_state(), legal[0].to_llm().string)
+    return mean(verdict.V() - verdict.Q(move.number) for move in legal)
+
+
+def over_runs(values: list[float]) -> tuple[float, float, float]:
+    # the mean over the runs and its 95% BCa bootstrap interval (seeded): regret is bounded below and skewed over few runs, where a t interval
+    # reaches below 0
+    ci = bootstrap_ci(Distribution.from_values(values))
+    return ci.value, ci.lower, ci.upper
+
+
+@dataclass
+class Curve:
+    # one condition on one game, for the plot: its label, the cumulative regret per training game and the test regret per epoch (mean, low, high)
+    game: str
+    label: str
+    cumulative: list[tuple[float, float, float]]
+    test: list[tuple[int, tuple[float, float, float]]]
+    uniform: float | None
+
+
+def condition_label(trainee: PlayerConfig) -> str:
+    # the trainee's config without its model names, which every condition shares and which make the labels long; player_label names only the
+    # component types, so the conditions of one experiment (selectors, options) would share a label
+    text = re.sub(r"model=[^,\[\]]+(\[[^\]]*\])?,?", "", trainee.params.to_string())
+    return re.sub(r"\[\]", "", text.replace("[,", "[").replace(",]", "]"))
+
+
+def show_regret(op: PlyBench, results: TrainingResults, plot: Path | None) -> None:
+    print("== Regret per condition (runs differing only in a bandit's shift pooled; means over runs with 95% BCa bootstrap intervals)")
+    groups: dict[tuple[str, str], list[RunRegret]] = defaultdict(list)
+    labels: dict[tuple[str, str], str] = {}
+    uniform: dict[tuple[str, str], float | None] = {}
+    for run in results.runs:
+        group = replicate_group(run)
+        replayer = build_replayer(op.registry, run.game)
+        groups[group].append(run_regret(results, run, replayer))
+        labels[group] = condition_label(run.trainee)
+        uniform.setdefault(group, uniform_regret(op, run, replayer))
+    curves: list[Curve] = []
+    for group, runs in groups.items():
+        game, trainee = group
+        games = min(len(run.train) for run in runs)
+        print(f"-- {game}: {trainee}\n   {len(runs)} runs, {games} training games each")
+        if games == 0:
+            continue
+        cumulative = [over_runs([sum(run.train[: index + 1]) for run in runs]) for index in range(games)]
+        value, low, high = cumulative[-1]
+        reference = uniform[group]
+        print(f"   cumulative regret: {value:.2f} [{low:.2f}, {high:.2f}]" + (f" (uniform policy: {reference * games:.2f})" if reference is not None else ""))
+        last = min(LAST_GAMES, games)
+        value, low, high = over_runs([mean(run.train_optimal[games - last : games]) for run in runs])
+        print(f"   optimal games among the last {last}: {value:.2f} [{low:.2f}, {high:.2f}]")
+        print(
+            f"   moves tried: {mean(len(run.moves) for run in runs):.1f} on average; suffix failures: {sum(not any(run.train_optimal[games // 2 : games]) for run in runs)} of {len(runs)} runs"
+        )
+        epochs = sorted(set.intersection(*(set(run.test) for run in runs)))
+        test = [(epoch, over_runs([mean(run.test[epoch]) for run in runs])) for epoch in epochs if all(run.test[epoch] for run in runs)]
+        print("   test regret per game: " + ", ".join(f"epoch {epoch} {value:.2f} [{low:.2f}, {high:.2f}]" for epoch, (value, low, high) in test))
+        curves.append(Curve(game, labels[group], cumulative, test, reference))
+    if plot is not None and curves:
+        print(f"   plot: {plot_regret(curves, plot)}")
+
+
+def plot_regret(curves: list[Curve], path: Path) -> Path:
+    # one row per game: left the cumulative regret over the training games, right the test regret per epoch. A condition keeps its colour in every
+    # row, in the order of the experiment file; the uniform policy in grey where it is known (exact for a one-decision game); bands are 95%
+    # bootstrap intervals over the runs
+    colours = {label: CATEGORICAL[index % len(CATEGORICAL)] for index, label in enumerate(dict.fromkeys(curve.label for curve in curves))}
+    grey = StyleOverride(color="#898781", linestyle="--")
+    panels = []
+    for game in dict.fromkeys(curve.game for curve in curves):
+        cumulative_layers: list[Layer] = []
+        test_layers: list[Layer] = []
+        rows = [curve for curve in curves if curve.game == game]
+        for curve in rows:
+            style = StyleOverride(color=colours[curve.label])
+            games = tuple(float(number) for number in range(1, len(curve.cumulative) + 1))
+            bands = tuple((low, high) for _, low, high in curve.cumulative)
+            cumulative_layers.append(LineLayer(games, tuple(value for value, _, _ in curve.cumulative), curve.label, bands, False, style=style))
+            if curve.test:
+                epochs = tuple(float(epoch) for epoch, _ in curve.test)
+                bands = tuple((low, high) for _, (_, low, high) in curve.test)
+                test_layers.append(LineLayer(epochs, tuple(value for _, (value, _, _) in curve.test), curve.label, bands, style=style))
+        reference = next((curve.uniform for curve in rows if curve.uniform is not None), None)
+        if reference is not None:
+            longest = max(len(curve.cumulative) for curve in rows)
+            cumulative_layers.append(LineLayer((0.0, float(longest)), (0.0, reference * longest), "uniform policy", show_markers=False, style=grey))
+            test_layers.append(BaselineLayer(reference, "uniform policy", in_legend=True, style=grey))
+        panels += [
+            Panel(cumulative_layers, Axis("cumulative regret", include_zero=True), Axis("training game"), f"{game}: training games"),
+            Panel(test_layers, Axis("regret per game", include_zero=True), Axis("epoch"), f"{game}: test games"),
+        ]
+    return render(Figure(panels, ncols=2, share_x=False), path)
+
+
 def grade_table(counts: dict[str, dict[bool, Counter[str]]], limit: int | None) -> None:
     # per key: the grades given to optimal moves and to other moves, and the share that agrees with the solver; also used by reask_feedback.py
     columns = (*GRADES, "none")
@@ -396,6 +542,7 @@ def main() -> None:
     parser.add_argument("--all-entries", action="store_true", help="memory section: print unchanged entries too")
     parser.add_argument("--max-chars", type=int, default=300, help="cut each text to one line of this length (default 300)")
     parser.add_argument("--full", action="store_true", help="print texts whole, line breaks included")
+    parser.add_argument("--plot", type=Path, help="regret section: draw the cumulative and the test regret into this PNG")
     args = parser.parse_args()
 
     op = build_op()
@@ -425,6 +572,8 @@ def main() -> None:
             show_feedback(harness, results, run, replayer, epochs, limit)
         if "reference" in args.show:
             show_reference(harness, run, epochs, limit)
+    if "regret" in args.show:
+        show_regret(op, results, args.plot)
 
 
 if __name__ == "__main__":
