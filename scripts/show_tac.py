@@ -41,7 +41,7 @@ from plybench.analysis.statistics.bundle import CIBundle
 from plybench.analysis.statistics.distribution import Distribution
 from plybench.analysis.statistics.intervals import bootstrap_ci
 from plybench.analysis.training import TrainingAnalysis
-from plybench.analysis.visual import CATEGORICAL, Axis, BaselineLayer, Figure, Layer, LineLayer, Panel, StyleOverride, game_title, player_label, render
+from plybench.analysis.visual import CATEGORICAL, Axis, BaselineLayer, CategoryTicks, Figure, Layer, LineLayer, Panel, StyleOverride, game_title, player_label, render
 from plybench.app import PlyBench
 from plybench.cli.shared import add_training_source_args, build_op, training_from_args
 from plybench.common.enums import GameResults, MetricName
@@ -432,12 +432,14 @@ def over_runs(values: list[float]) -> tuple[float, float, float]:
 
 @dataclass
 class Curve:
-    # one condition on one game, for the plot: its label, the cumulative regret per training game and the test regret per epoch (mean, low, high)
+    # one condition on one game, for the plot: its label, the cumulative regret per training game and the test regret per epoch (mean, low, high),
+    # and each run's cumulative regret at the end of training
     game: str
     label: str
     cumulative: list[tuple[float, float, float]]
     test: list[tuple[int, tuple[float, float, float]]]
     uniform: float | None
+    finals: list[float]
 
 
 def condition_label(trainee: PlayerConfig) -> str:
@@ -478,15 +480,16 @@ def show_regret(op: PlyBench, results: TrainingResults, plot: Path | None) -> No
         epochs = sorted(set.intersection(*(set(run.test) for run in runs)))
         test = [(epoch, over_runs([mean(run.test[epoch]) for run in runs])) for epoch in epochs if all(run.test[epoch] for run in runs)]
         print("   test regret per game: " + ", ".join(f"epoch {epoch} {value:.2f} [{low:.2f}, {high:.2f}]" for epoch, (value, low, high) in test))
-        curves.append(Curve(game, labels[group], cumulative, test, reference))
+        curves.append(Curve(game, labels[group], cumulative, test, reference, [sum(run.train[:games]) for run in runs]))
     if plot is not None and curves:
         print(f"   plot: {plot_regret(curves, plot)}")
 
 
 def plot_regret(curves: list[Curve], path: Path) -> Path:
-    # one row per game: left the cumulative regret over the training games, right the test regret per epoch. A condition keeps its colour in every
-    # row, in the order of the experiment file; the uniform policy in grey where it is known (exact for a one-decision game); bands are 95%
-    # bootstrap intervals over the runs
+    # one row per game: the cumulative regret over the training games, the test regret per epoch, and each run's cumulative regret at the end (one
+    # dot per run, the mean with its interval beside them: a mean over few runs hides whether all runs did a little worse or a few got stuck). A
+    # condition keeps its colour in every row, in the order of the experiment file; the uniform policy in grey where it is known (exact for a
+    # one-decision game); bands and whiskers are 95% bootstrap intervals over the runs
     colours = {label: CATEGORICAL[index % len(CATEGORICAL)] for index, label in enumerate(dict.fromkeys(curve.label for curve in curves))}
     grey = StyleOverride(color="#898781", linestyle="--")
     panels = []
@@ -508,11 +511,22 @@ def plot_regret(curves: list[Curve], path: Path) -> Path:
             longest = max(len(curve.cumulative) for curve in rows)
             cumulative_layers.append(LineLayer((0.0, float(longest)), (0.0, reference * longest), "uniform policy", show_markers=False, style=grey))
             test_layers.append(BaselineLayer(reference, "uniform policy", in_legend=True, style=grey))
+        run_layers: list[Layer] = []
+        for index, curve in enumerate(rows):
+            dots = StyleOverride(color=colours[curve.label], linestyle="none")
+            spread = tuple(index - 0.2 + 0.4 * number / max(len(curve.finals) - 1, 1) for number in range(len(curve.finals)))
+            run_layers.append(LineLayer(spread, tuple(curve.finals), curve.label, style=dots))
+            value, low, high = curve.cumulative[-1]
+            run_layers.append(LineLayer((index + 0.35,), (value,), "", ((low, high),), style=StyleOverride(color=colours[curve.label], marker="D")))
+        if reference is not None:
+            run_layers.append(BaselineLayer(reference * max(len(curve.cumulative) for curve in rows), "uniform policy", style=grey))
+        ticks = CategoryTicks(tuple(str(number) for number in range(1, len(rows) + 1)))
         panels += [
             Panel(cumulative_layers, Axis("cumulative regret", include_zero=True), Axis("training game"), f"{game}: training games"),
             Panel(test_layers, Axis("regret per game", include_zero=True), Axis("epoch"), f"{game}: test games"),
+            Panel(run_layers, Axis("cumulative regret at the end", include_zero=True), Axis("condition (legend order)", ticks=ticks), f"{game}: each run"),
         ]
-    return render(Figure(panels, ncols=2, share_x=False), path)
+    return render(Figure(panels, ncols=3, share_x=False), path)
 
 
 def grade_table(counts: dict[str, dict[bool, Counter[str]]], limit: int | None) -> None:
