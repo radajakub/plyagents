@@ -275,7 +275,7 @@ async def plan(args: argparse.Namespace, run: TrainingRun, every: list[Game], ga
 async def rebuild_problems(run: TrainingRun, every: list[Game], game: TurnBasedGame, services: Services) -> list[str]:
     # the run's own inputs and critic must give back its recorded calls, else the levels are not built as the training builds them
     run_params = params(run)
-    if run_params.critic.kind is CriticType.LLM:
+    if run_params.critic.kind in (CriticType.LLM_V, CriticType.LLM_Q):
         return []
     own = await rebuilt(run, every, feedback_params(run).inputs, run_params.critic.to_string(), game, services)
     differ = [where for where, call in own.items() if call != next((played.system, played.prompt) for played in every if (played.epoch, played.round) == where)]

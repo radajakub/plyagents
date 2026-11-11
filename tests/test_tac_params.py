@@ -78,8 +78,8 @@ def test_a_long_suffix_keeps_its_start_and_a_hash_of_the_whole():
         ),
         ("actor=tabular[target=critic],critic=tabular,train_selector=eps_greedy[eps=0.3]", "TAC: tabular actor, tabular critic, no feedback"),
         (
-            "actor=llm[model=gemini:gemini-3.5-flash-lite],critic=llm[model=metacentrum:gpt-oss-120b]",
-            "TAC: LLM actor (gemini-3.5-flash-lite), LLM critic (gpt-oss-120b), no feedback",
+            "actor=llm[model=gemini:gemini-3.5-flash-lite],critic=llm_v[model=metacentrum:gpt-oss-120b]",
+            "TAC: LLM actor (gemini-3.5-flash-lite), LLM V critic (gpt-oss-120b), no feedback",
         ),
     ],
 )
@@ -91,7 +91,7 @@ def test_the_display_name_is_tac_and_its_components(spec, name):
 def test_the_models_are_every_llm_component_once_nested_ones_included():
     # rung 4: the actor and its compress, the critic and its compress, the feedback; two models, the second only in the critic's compress
     flash, gpt = "gemini:gemini-3.5-flash-lite[thinking_enabled=True]", "metacentrum:gpt-oss-120b"
-    spec = f"actor=llm[model={flash},budget=600,apply=compress[model={flash}]],critic=llm[model={flash},budget=600,apply=compress[model={gpt}]],feedback=llm[model={flash}]"
+    spec = f"actor=llm[model={flash},budget=600,apply=compress[model={flash}]],critic=llm_q[model={flash},budget=600,apply=compress[model={gpt}]],feedback=llm[model={flash}]"
     models = TACParams.from_string(spec).models()
     assert [f"{model.provider.value}:{model.model_name}" for model in models] == ["gemini:gemini-3.5-flash-lite", "metacentrum:gpt-oss-120b"]
     assert TACParams.from_string("actor=tabular,critic=oracle").models() == []

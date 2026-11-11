@@ -102,7 +102,7 @@ class TACParams(CheckpointedParams):
         names = {model.config.model_name for model in models.values() if model is not None}
         parts = []
         for role, config in roles:
-            kind = {"none": "no", "llm": "LLM"}.get(str(config.kind.value), str(config.kind.value))
+            kind = {"none": "no", "llm": "LLM", "llm_v": "LLM V", "llm_q": "LLM Q"}.get(str(config.kind.value), str(config.kind.value))
             model = models[role]
             parts.append(f"{kind} {role}" + (f" ({model.config.model_name})" if len(names) > 1 and model is not None else ""))
         return f"TAC: {', '.join(parts)}" + (f" ({names.pop()})" if len(names) == 1 else "")

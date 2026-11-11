@@ -102,7 +102,13 @@ def test_a_critic_target_without_a_critic_is_refused_when_the_player_is_built():
 
 @pytest.mark.parametrize(
     ("critic", "inputs", "refused"),
-    [("none", "delta", "inputs=delta needs"), ("llm[model=metacentrum:gpt-oss-120b[reasoning_effort=low]]", "delta", "inputs=delta needs"), ("none", "q", "inputs=q needs")],
+    [
+        ("none", "delta", "inputs=delta needs"),
+        ("llm_v[model=metacentrum:gpt-oss-120b[reasoning_effort=low]]", "delta", "inputs=delta needs"),
+        # the Q critic gives no value of the situation, even with its numbers
+        ("llm_q[model=metacentrum:gpt-oss-120b[reasoning_effort=low],value=True]", "delta", "inputs=delta needs"),
+        ("none", "q", "inputs=q needs"),
+    ],
 )
 def test_feedback_inputs_the_critic_cannot_give_are_refused_when_the_player_is_built(critic, inputs, refused):
     feedback = f"llm[model=metacentrum:gpt-oss-120b[reasoning_effort=low],inputs={inputs}]"

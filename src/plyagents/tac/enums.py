@@ -15,7 +15,15 @@ class CriticType(ExtendedEnum):
     NONE = "none"
     ORACLE = "oracle"
     TABULAR = "tabular"
-    LLM = "llm"
+    # the LLM critics, named by what they assess: the situation (V) or each legal move (Q)
+    LLM_V = "llm_v"
+    LLM_Q = "llm_q"
+
+
+class NotesType(ExtendedEnum):
+    # the entries of the LLM Q critic's memory: one per situation, covering all its moves, or one per move of a situation
+    SITUATION = "situation"
+    MOVE = "move"
 
 
 class SelectorType(ExtendedEnum):

@@ -13,3 +13,5 @@ class Assessment:
     # an LLM critic's: the entry of its memory it read, and its reasoning for the assessment
     context: str | None = None
     reasoning: str | None = None
+    # the text assesses each legal move (the LLM Q critic), not the situation: the feedback model labels it so, and its critic notes are about the move
+    moves: bool = False

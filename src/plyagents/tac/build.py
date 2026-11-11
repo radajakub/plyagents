@@ -31,19 +31,20 @@ def build_tac_player(game: TurnBasedGame, player_config: PlayerConfig, identifie
     if not isinstance(params, TACParams):
         raise TypeError(f"{player_config.to_string()} is not a TAC config")
 
-    # a critic without values cannot give the actor its targets; caught here rather than after the first game. The llm critic's
-    # optional number is for diagnostics, not a target
+    # a critic without values cannot give the actor its targets; caught here rather than after the first game. The LLM critics'
+    # optional numbers are for diagnostics, not targets
     actor = params.actor.params
 
-    if isinstance(actor, TabularActorParams) and actor.target.kind is TargetType.CRITIC and params.critic.kind in (CriticType.NONE, CriticType.LLM):
+    if isinstance(actor, TabularActorParams) and actor.target.kind is TargetType.CRITIC and params.critic.kind in (CriticType.NONE, CriticType.LLM_V, CriticType.LLM_Q):
         raise ValueError("target=critic needs a critic that gives values (critic=oracle or critic=tabular)")
 
     # the feedback's inputs that need numbers from the critic, checked here for the same reason
     feedback, critic = params.feedback.params, params.critic.params
     if isinstance(feedback, LLMFeedbackParams):
-        numbers = params.critic.kind in (CriticType.ORACLE, CriticType.TABULAR) or (isinstance(critic, LLMCriticParams) and critic.value)
+        # the Q critic gives no value of the situation, so no delta
+        numbers = params.critic.kind in (CriticType.ORACLE, CriticType.TABULAR) or (params.critic.kind is CriticType.LLM_V and isinstance(critic, LLMCriticParams) and critic.value)
         if "delta" in feedback.shown and not numbers:
-            raise ValueError("feedback inputs=delta needs a critic that gives numbers (critic=oracle, critic=tabular or critic=llm[value=true])")
+            raise ValueError("feedback inputs=delta needs a critic that gives numbers (critic=oracle, critic=tabular or critic=llm_v[value=true])")
         if "q" in feedback.shown and params.critic.kind not in (CriticType.ORACLE, CriticType.TABULAR):
             raise ValueError("feedback inputs=q needs a critic with action values (critic=oracle or critic=tabular)")
 

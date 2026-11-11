@@ -50,6 +50,9 @@ def test_the_oracle_grades_by_the_solved_game_and_names_the_best_move(tic_tac_to
     assert mistake.critic_note == "with best play this position draws"
     # a failed move has no action to judge
     assert failed == StepFeedback()
+    # for a critic of the moves (llm_q), the note states the value of the move played
+    [about_move] = asyncio.run(feedback.give(steps[1:2], [Assessment(None, "", moves=True)], -1.0, {}, calls))
+    assert about_move.critic_note == "with best play this move loses" and about_move.lesson == mistake.lesson
 
 
 def test_with_chance_the_oracle_names_expected_outcomes_not_draws(tmp_path, monkeypatch, calls):

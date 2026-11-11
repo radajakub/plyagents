@@ -44,7 +44,7 @@ class OracleFeedback(Feedback):
     def _result(self, value: float) -> str:
         return self._shaper.value_text(value, self._certain)
 
-    def _judge(self, step: TACStep) -> StepFeedback:
+    def _judge(self, step: TACStep, assessment: Assessment) -> StepFeedback:
         assert self._cache is not None, "initialize must be called before the feedback judges"
         avq = self._cache[step.player, step.os_state]
         if avq is None or step.action is None:
@@ -53,7 +53,8 @@ class OracleFeedback(Feedback):
         value, action_value = avq.V(), avq.Q(number)
         best = [action for action, other in zip(step.legal, step.legal_numbers) if avq.check_optimal(other)]
         reason = f"Q* {action_value:+g} against V* {value:+g}"
-        note = f"with best play this position {self._result(value)}"
+        # the critic note states what the critic estimates: the position's value, or for a critic of the moves the value of the move played
+        note = f"with best play this move {self._result(action_value)}" if assessment.moves else f"with best play this position {self._result(value)}"
         if action_value == value:
             return StepFeedback("good", reason, f"{step.action} is a best move here: with best play it {self._result(value)}.", note)
         grade: Grade = "mistake" if action_value < 0 else "dubious"
@@ -61,7 +62,7 @@ class OracleFeedback(Feedback):
         return StepFeedback(grade, reason, lesson, note)
 
     async def give(self, steps: list[TACStep], assessments: list[Assessment], outcome: float, history: Mapping[str, KeyCounts], calls: Calls) -> list[StepFeedback]:
-        return [self._judge(step) for step in steps]
+        return [self._judge(step, assessment) for step, assessment in zip(steps, assessments)]
 
     def describe(self) -> str:
         return "grades each move by Q*(s, a) against V*(s) and names the best moves (privileged: reads the true state)"

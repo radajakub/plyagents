@@ -28,6 +28,8 @@ Outcome for the agent: {outcome:+g} (+1 is a win, 0 a draw, -1 a loss).
 
 For every move give its step number, a grade ({grades}) and a short reason. Where the agent should play differently next time, or keep playing the same, add a lesson: one or two sentences it can act on when it meets this situation again{limit}.{critic}"""
 CRITIC = " Where the value estimate of a move was wrong, add a critic note: what the position was really worth, and why."
+# with the Q critic, whose text assesses every legal move
+CRITIC_Q = " Where the critic's assessment of the move played was wrong, add a critic note: what that move was really worth here, and why."
 HISTORY = "What the agent's earlier games showed in these situations (the moves it played there and how those games ended):"
 
 # what F is shown besides the moves and the outcome, each a block in a fixed format; in the order of the information ladder
@@ -121,7 +123,7 @@ class LLMFeedback(Feedback):
     def _values(self, assessments: list[Assessment]) -> list[float]:
         values = [assessment.value for assessment in assessments]
         if any(value is None for value in values):
-            raise ValueError("feedback inputs=delta needs a critic that gives numbers (oracle, tabular, or llm[value=true])")
+            raise ValueError("feedback inputs=delta needs a critic that gives numbers (oracle, tabular, or llm_v[value=true])")
         return [value for value in values if value is not None]
 
     @staticmethod
@@ -140,7 +142,7 @@ class LLMFeedback(Feedback):
             lines.append(f"The agent's reasoning for this move:\n{step.reasoning.strip()}")
         lines.append(f"Move: {step.action or 'no valid move'}")
         if "value" in self.inputs and assessment.text:
-            lines.append(f"Value estimate: {assessment.text}")
+            lines.append(f"Move assessments:\n{assessment.text}" if assessment.moves else f"Value estimate: {assessment.text}")
         if delta is not None:
             before, after, last = delta
             lines.append(f"Critic: value before the move {before:+.2f}, after {after:+.2f}{' (the outcome)' if last else ''}; change {after - before:+.2f}.")
@@ -160,14 +162,15 @@ class LLMFeedback(Feedback):
             deltas = [(value, values[index + 1] if index + 1 < len(values) else outcome, index + 1 == len(values)) for index, value in enumerate(values)]
         shown = [self._step(number, step, assessment, delta) for number, (step, assessment, delta) in enumerate(zip(steps, assessments, deltas), start=1)]
         estimated = ("value" in self.inputs and any(assessment.text for assessment in assessments)) or "delta" in self.inputs
+        moves = any(assessment.moves for assessment in assessments)
         return PROMPT.format(
-            estimates=" and the value estimate of the position" if estimated else "",
+            estimates=(" and the critic's assessment of each legal move" if moves else " and the value estimate of the position") if estimated else "",
             steps="\n\n".join(shown),
             history=history_block(history, [step.key for step in steps]) if "history" in self.inputs else "",
             outcome=outcome,
             grades=", ".join(GRADES),
             limit=f", at most {self.lesson_chars} characters" if self.lesson_chars is not None else "",
-            critic=CRITIC if estimated else "",
+            critic=(CRITIC_Q if moves else CRITIC) if estimated else "",
         )
 
     async def give(self, steps: list[TACStep], assessments: list[Assessment], outcome: float, history: Mapping[str, KeyCounts], calls: Calls) -> list[StepFeedback]:
