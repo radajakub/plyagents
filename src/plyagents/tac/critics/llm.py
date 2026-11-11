@@ -88,10 +88,13 @@ class LLMCritic(Critic[MemoryUpdate]):
         return f"The situation:\n{key}{notes}\n\n{REQUEST.format(limit=limit)}" + (VALUE if self.value else "")
 
     async def _assess(self, system: str, key: str, calls: Calls) -> Assessment:
+        # with the entry it read and its reasoning, for a feedback model shown them
+        entry = self.memory.get(key).text or None
         if not self.value:
-            return Assessment(None, (await calls.text("critic", self.model.config, system, self.prompt(key))).strip())
-        answer = await calls.structured("critic", self.model.config, system, self.prompt(key), _Valued)
-        return Assessment(answer.value, answer.assessment.strip())
+            text, reasoning = await calls.reasoned_text("critic", self.model.config, system, self.prompt(key))
+            return Assessment(None, text.strip(), context=entry, reasoning=reasoning or None)
+        answer, reasoning = await calls.reasoned_structured("critic", self.model.config, system, self.prompt(key), _Valued)
+        return Assessment(answer.value, answer.assessment.strip(), context=entry, reasoning=reasoning or None)
 
     async def assess(self, steps: list[TACStep], calls: Calls) -> list[Assessment]:
         # one call per key, in the order of first visit; the calls start in that order, so each takes its seed by it

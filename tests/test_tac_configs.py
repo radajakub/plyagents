@@ -75,7 +75,7 @@ def test_a_model_is_written_with_its_options_in_brackets():
 
 def test_a_models_options_are_validated_when_built_against_a_configured_provider():
     # a configured Metacentrum client (nothing is called): gpt-oss-120b reasons always, so it needs thinking_enabled
-    services = Services(LLM(LLMConfig(metacentrum=MetacentrumProviderConfig(api_key="unused", base_url="http://localhost"))))
+    services = Services(LLM(LLMConfig(metacentrum=MetacentrumProviderConfig(api_key="unused", base_url="http://localhost"))), lambda key: False)
     with pytest.raises(ValueError, match="requires thinking to be enabled"):
         require_model(ModelSpec.from_string("metacentrum:gpt-oss-120b[reasoning_effort=low]"), "llm actor", services)
     good = ModelSpec.from_string("metacentrum:gpt-oss-120b[thinking_enabled=True,reasoning_effort=low]")

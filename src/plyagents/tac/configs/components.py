@@ -80,8 +80,10 @@ class ComponentSpec[T, P: ComponentParams]:
 
 @dataclass(frozen=True)
 class Services:
-    # what every builder hands a component besides its params: the LLM router (each LLM component names its own model)
+    # what every builder hands a component besides its params: the LLM router (each LLM component names its own model), and
+    # whether a game (by its registry key) can be solved, for the player's reference record
     llm: LLM
+    solvable: Callable[[str], bool]
 
 
 def require_model(model: ModelSpec | None, component: str, services: Services) -> ModelSpec:

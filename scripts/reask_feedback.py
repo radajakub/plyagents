@@ -1,22 +1,37 @@
-"""Ask the LLM feedback model again about the training games of a finished TAC run, with more information than it had, and grade its answers.
+"""Ask the LLM feedback model again about the training games of a finished TAC run, with other information than it had, and grade its answers.
 
-Offline: no game is played. Each training game's recorded feedback call is sent again, changed by the variant, and the new grades are compared
-with the solver's verdict on each move (as the feedback section of show_tac.py does for the recorded grades). Calls the model: costs money.
+Offline: no game is played. Each training game that had a feedback call is asked again, and the new grades are compared with the solver's verdict on
+each move (as the feedback section of show_tac.py does for the recorded grades). Calls the model: costs money.
 
-Variants:
+Variants of the first round, each the recorded call changed:
     as_run   the recorded call unchanged: the noise of the grades, the baseline for the others
     caution  the system message also says the rules may leave parts of the game unstated, so a known puzzle's answer may not hold
     history  the prompt also shows, for each situation of the game, the moves the agent played there in the run's earlier training games
              and their outcomes: the evidence across games the feedback model never sees in a run
 
-Each answer is saved as its own file, <out>/<variant>/epoch_<e>_game_<r>.json (the grades, the keys and the solver's verdicts, the call), and an
-answer already saved is not asked again, so a stopped run continues. A plyservice scripts job (see its README): --check --json prints the plan,
-each answer prints `progress: <done>/<total>`, --status prints the tables of the saved answers.
+Levels of the information ladder (experiments/tac-feedback-fixes.md in the phd repository), each call built again from the recorded steps by the
+feedback model's own code with the inputs of the level (LLMFeedback, inputs=...), each level the one before plus one input:
+    L0  the moves and the outcome (REINFORCE)            L3  + the critic's value of every legal move (all-action policy gradient)
+    L1  + the actor's memory entry it read (theta)       L4  + the earlier games in the same situations (the batch)
+    L2  + the critic's value before, after, change (TD)  L5  + the actor's (and an LLM critic's) reasoning
+The levels from L2 on are asked once per critic (--critics): tabular (Monte Carlo V and Q, replayed over the run's training games in the order they
+were played, so each call sees only the games before it) and oracle (V* and Q* of the solved game: the bound, privileged). --no-q leaves L3 out and q
+out of L4 and L5.
+    obfuscated  L0 with the game renamed (doors to boxes, the host to an operator, the car to a prize): no cue of the known puzzle
+
+--sample-seeds asks each call again with other seeds (0 is the game's own, which reproduces the recorded answers): the noise of the grades.
+
+Each answer is saved as its own file, <out>/<name>/epoch_<e>_game_<r>.json (the grades, the keys and the solver's verdicts, the call), and an
+answer already saved is not asked again, so a stopped run continues. The name is the variant, the level's inputs and critic (e.g.
+memory+delta_tabular), or obfuscated, with _seed<n> for another seed. A plyservice scripts job (see its README): --check --json prints the plan and
+checks that the calls are rebuilt exactly (the run's own inputs give its recorded prompts), each answer prints `progress: <done>/<total>`, --status
+prints the tables of the saved answers.
 
 Examples:
     uv run python scripts/reask_feedback.py --experiment tac_monty_hall_ladder --trainees "<R3 config>" --out analysis/tac_monty_hall_ladder/reask_r3
-    uv run python scripts/reask_feedback.py --experiment tac_monty_hall_ladder --trainees "<R3 config>" --out <dir> --variants history --epochs 1 2
-    uv run python scripts/reask_feedback.py --experiment tac_monty_hall_ladder --trainees "<R3 config>" --out <dir> --variants caution history --dry-run
+    uv run python scripts/reask_feedback.py --experiment tac_monty_hall_ladder --trainees "<R3 config>" --out <dir> --variants --levels L0 L1 L2 L4 L5 --no-q
+    uv run python scripts/reask_feedback.py --experiment tac_monty_hall_ladder --trainees "<R3 config>" --out <dir> --variants as_run --sample-seeds 1 2
+    uv run python scripts/reask_feedback.py --experiment tac_monty_hall_ladder --trainees "<R3 config>" --out <dir> --levels L2 --dry-run
     uv run python scripts/reask_feedback.py --out analysis/tac_monty_hall_ladder/reask_r3 --status
 """
 
@@ -25,6 +40,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,42 +48,79 @@ from pathlib import Path
 from plybench.analysis.replay import build_replayer
 from plybench.cli.shared import add_training_source_args, build_op, training_from_args
 from plybench.configs.training_run import TrainingRun
+from plybench.core.game import TurnBasedGame
 from plybench.harness.training.training import TrainingHarness
 from plybench.player.learnable import LEARNER_CALLS
 from plybench.trackers.llm_call import LLMCall
+from plybench.utils.seed import derive_seed
 from plyllm import ModelConfig
 from show_tac import grade_table
 
-from plyagents.tac.feedback.llm import LLMFeedbackParams, _Verdicts
-from plyagents.tac.model.feedback import GRADES
+from plyagents.tac.configs.components import Services
+from plyagents.tac.critics.build import CRITICS
+from plyagents.tac.enums import CriticType
+from plyagents.tac.feedback.llm import LLMFeedback, LLMFeedbackParams, _Verdicts, history_block, read_inputs
+from plyagents.tac.model.feedback import GRADES, StepFeedback
+from plyagents.tac.model.reference import Reference
+from plyagents.tac.model.step import TACStep
 from plyagents.tac.params import TACParams
+from plyagents.tac.rewards.build import REWARDS
 from plyagents.tac.utils.calls import Calls
 
 VARIANTS = ("as_run", "caution", "history")
 CAUTION = "\n\nThe rules may leave parts of the game unstated. Do not assume they work as in a puzzle or game you know; judge each move by what the games showed."
-HISTORY = "What the agent's earlier games showed in these situations (the moves it played there and how those games ended):"
 # the prompt's line after the moves; the history goes before it
 OUTCOME = "\n\nOutcome for the agent:"
+# each level the one before plus one input; the levels showing the critic's numbers are asked once per critic
+LEVELS = {"L0": "none", "L1": "memory", "L2": "memory+delta", "L3": "memory+delta+q", "L4": "memory+delta+q+history", "L5": "memory+delta+q+history+reasoning"}
+CRITICS_OF_LEVELS = {"tabular": "tabular", "oracle": "oracle"}
+OBFUSCATED = "obfuscated"
+# Monty Hall's words and neutral ones, whole sentences first, then words (whole words, any case); afterwards no cue may be left
+RENAMES = (
+    ("You are a contestant on a game show.", "You take part in a task."),
+    ("A car is behind one door, and a goat is behind each of the others.", "A prize is in one box, and each of the others is empty."),
+    ("You win the car if your final door hides it.", "You win the prize if your final box holds it."),
+    ("which hides a goat", "which is empty"),
+    ("car", "prize"),
+    ("doors", "boxes"),
+    ("door", "box"),
+    ("host", "operator"),
+)
+CUES = ("door", "doors", "host", "car", "goat", "goats", "contestant", "game show", "monty", "hall", "behind")
 
 
 @dataclass
 class Game:
-    # one recorded training game: where it is, the agent's key and move and the solver's verdict per step, the outcome, the recorded call
+    # one recorded training game: where it is, the agent's steps as the player recorded them, the key, move and solver's verdict per step, the
+    # result and the outcome, and its last usable feedback call (None for a game without one: it is replayed, not asked)
     epoch: int
     round: int
     seed: int | None
+    steps: list[TACStep]
     keys: list[str]
     moves: list[str]
     optimal: list[bool]
     result: str
+    outcome: float
+    system: str | None
+    prompt: str | None
+
+
+@dataclass(frozen=True)
+class Ask:
+    # one answer to ask: under which name it is saved, for which game, the call, and the seed of the game it is asked with
+    name: str
+    game: Game
     system: str
     prompt: str
+    seed: int | None
 
 
-def load_games(harness: TrainingHarness, run: TrainingRun, epochs: list[int] | None) -> list[Game]:
-    # the run's training games in the order they were played, each with its last usable feedback call; a game without one is left out
+def load_games(harness: TrainingHarness, run: TrainingRun, services: Services) -> list[Game]:
+    # every training game of the run in the order it was played (the order the updates were committed in), each with its last usable feedback call
     op, games = harness.op, []
     replayer = build_replayer(op.registry, run.game)
+    shaper = REWARDS.build(params(run).reward, services)
     for epoch in harness.get_results().for_run(run):
         tracker = epoch.train
         if tracker is None:
@@ -77,45 +130,51 @@ def load_games(harness: TrainingHarness, run: TrainingRun, epochs: list[int] | N
                 continue
             path = harness.path_builder.learner_dir(harness.experiment, run, epoch.epoch.index) / f"game_{round_}" / LEARNER_CALLS
             calls = [call for call in json.loads(path.read_text()) if call["role"] == "feedback" and not call.get("failure")] if path.exists() else []
-            if not calls:
-                continue
-            steps = replayer.replay_steps(record, tracker.i)
-            call = calls[-1]
+            replayed = replayer.replay_steps(record, tracker.i)
+            steps = [TACStep.from_dict(step.step.data or {}) for step in replayed]
+            result = record.get_result(tracker.i)
             games.append(
                 Game(
                     epoch.epoch.index,
                     round_,
                     record.seed,
-                    [(step.step.data or {}).get("key", step.step.observation) for step in steps],
-                    [step.step.move for step in steps],
-                    [step.is_optimal for step in steps],
-                    record.get_result(tracker.i).name.lower(),
-                    call["system_message"],
-                    call["prompt_message"],
+                    steps,
+                    [step.key for step in steps],
+                    [step.step.move for step in replayed],
+                    [step.is_optimal for step in replayed],
+                    result.name.lower(),
+                    shaper.outcome(result, steps),
+                    calls[-1]["system_message"] if calls else None,
+                    calls[-1]["prompt_message"] if calls else None,
                 )
             )
-    return [game for game in games if epochs is None or game.epoch in epochs]
+    return games
+
+
+def params(run: TrainingRun) -> TACParams:
+    return TACParams.from_string(run.trainee.to_string().partition(":")[2])
+
+
+def feedback_params(run: TrainingRun) -> LLMFeedbackParams:
+    # the run's LLM feedback, its model with options (the recorded calls name the model without them)
+    feedback = params(run).feedback.params
+    if not isinstance(feedback, LLMFeedbackParams) or feedback.model is None:
+        raise SystemExit(f"the run's feedback names no LLM model: {run.trainee.to_string()}")
+    return feedback
 
 
 def history(game: Game, earlier: list[Game]) -> str:
-    # per step of the game: the moves the agent played in the same situation in the earlier games, with their outcomes
-    lines = []
-    for number, key in enumerate(game.keys, start=1):
-        seen: dict[str, Counter[str]] = defaultdict(Counter)
-        for other in earlier:
-            for other_key, move in zip(other.keys, other.moves):
-                if other_key == key:
-                    seen[move][other.result] += 1
-        if not seen:
-            lines.append(f"Step {number}: no earlier games in this situation.")
-            continue
-        parts = [f"{move} in {sum(counter.values())} games ({', '.join(f'{count} {result}' for result, count in counter.most_common())})" for move, counter in seen.items()]
-        lines.append(f"Step {number}: " + "; ".join(parts) + ".")
-    return f"\n\n{HISTORY}\n" + "\n".join(lines)
+    # the first round's history: per step, the moves played in the same situation in the earlier games that had a feedback call, with their results
+    seen = Reference()
+    for other in earlier:
+        for key, move in zip(other.keys, other.moves):
+            seen.add(key, move, other.outcome)
+    return history_block(seen.counts, game.keys)
 
 
 def changed(game: Game, earlier: list[Game], variant: str) -> tuple[str, str]:
-    # the system message and the prompt of the call for the variant
+    # the system message and the prompt of the recorded call, changed for a variant of the first round
+    assert game.system is not None and game.prompt is not None
     if variant == "caution":
         return game.system + CAUTION, game.prompt
     if variant == "history":
@@ -126,33 +185,123 @@ def changed(game: Game, earlier: list[Game], variant: str) -> tuple[str, str]:
     return game.system, game.prompt
 
 
-def feedback_model(run: TrainingRun) -> ModelConfig:
-    # the model of the run's LLM feedback, options included (the recorded calls name the model without them)
-    params = TACParams.from_string(run.trainee.to_string().partition(":")[2]).feedback.params
-    if not isinstance(params, LLMFeedbackParams) or params.model is None:
-        raise SystemExit(f"the run's feedback names no LLM model: {run.trainee.to_string()}")
-    return params.model.config
+async def rebuilt(run: TrainingRun, games: list[Game], inputs: str, critic: str, game: TurnBasedGame, services: Services) -> dict[tuple[int, int], tuple[str, str]]:
+    # the calls of the games that had one, built by the feedback model's code with these inputs and this critic; the critic and the history are
+    # replayed over every training game in order, each game assessed with the state before its own update, as in training
+    feedback_config = feedback_params(run)
+    assert feedback_config.model is not None
+    feedback = LLMFeedback(feedback_config.model, feedback_config.lesson_chars, LLMFeedbackParams(inputs=inputs).shown)
+    judge = CRITICS.build(CRITICS.config(critic), services)
+    judge.prepare(game)
+    calls = Calls(services.llm, None, lambda call: None)
+    built: dict[tuple[int, int], tuple[str, str]] = {}
+    reference = Reference()
+    for played in games:
+        assessments = await judge.assess(played.steps, calls)
+        if played.prompt is not None:
+            history = {key: reference.before(key) for key in played.keys}
+            built[played.epoch, played.round] = (feedback.system(played.steps), feedback.prompt(played.steps, assessments, played.outcome, history))
+        update = await judge.propose(played.steps, played.outcome, [StepFeedback()] * len(played.steps), calls)
+        if update is not None:
+            judge.commit(update)
+        for step in played.steps:
+            if step.action is not None:
+                reference.add(step.key, step.action, played.outcome)
+    return built
 
 
-async def ask(calls: Calls, model: ModelConfig, game: Game, earlier: list[Game], variant: str) -> list[str]:
-    # the new grade of every step; "none" for a step the answer leaves out
-    system, prompt = changed(game, earlier, variant)
-    answer = await calls.structured("feedback", model, system, prompt, _Verdicts)
+async def oracle_deltas(games: list[Game], game: TurnBasedGame, services: Services) -> dict[tuple[int, int], list[float]]:
+    # per step the TD error under V*: V*(s_t+1) - V*(s_t), the outcome after the last move; its sign is what the classical estimator would use
+    oracle = CRITICS.build(CRITICS.config("oracle"), services)
+    oracle.prepare(game)
+    calls = Calls(services.llm, None, lambda call: None)
+    deltas: dict[tuple[int, int], list[float]] = {}
+    for played in games:
+        values = [assessment.value for assessment in await oracle.assess(played.steps, calls)]
+        after = [*values[1:], played.outcome]
+        deltas[played.epoch, played.round] = [next_value - value for value, next_value in zip(values, after) if value is not None and next_value is not None]
+    return deltas
+
+
+def obfuscate(text: str) -> str:
+    # the call without the known puzzle's words; fails if a cue is left, rather than asking a call that still names it
+    for old, new in RENAMES:
+        text = re.sub(rf"(?<!\w){re.escape(old)}(?!\w)", lambda match, new=new: new[0].upper() + new[1:] if match.group(0)[0].isupper() else new, text, flags=re.IGNORECASE)
+    left = [cue for cue in CUES if re.search(rf"\b{re.escape(cue)}\b", text, flags=re.IGNORECASE)]
+    if left:
+        raise ValueError(f"the obfuscated call still has {left}: add them to RENAMES")
+    return text
+
+
+def level_names(levels: list[str], critics: list[str], no_q: bool) -> list[tuple[str, str, str]]:
+    # (name, inputs, critic) per level and critic, without duplicates (L3 without q is L2); the levels without the critic's numbers once, with no critic
+    names: dict[str, tuple[str, str, str]] = {}
+    for level in levels:
+        inputs = read_inputs("+".join(name for name in LEVELS[level].split("+") if not (no_q and name == "q")))
+        shown = LLMFeedbackParams(inputs=inputs).shown
+        for critic in critics if shown & {"delta", "q"} else ["none"]:
+            name = inputs if critic == "none" else f"{inputs}_{critic}"
+            names.setdefault(name, (name, inputs, "none" if critic == "none" else CRITICS_OF_LEVELS[critic]))
+    return list(names.values())
+
+
+async def plan(args: argparse.Namespace, run: TrainingRun, every: list[Game], game: TurnBasedGame, services: Services) -> tuple[list[Ask], list[str]]:
+    # every answer asked, before any call, and the problems that stop the run: a call that is not rebuilt exactly is a bug in the rebuild
+    asked = [played for played in every if played.prompt is not None and (args.epochs is None or played.epoch in args.epochs)]
+    with_calls = [played for played in every if played.prompt is not None]
+    calls: dict[str, dict[tuple[int, int], tuple[str, str]]] = {}
+    for variant in args.variants:
+        calls[variant] = {(played.epoch, played.round): changed(played, with_calls[: with_calls.index(played)], variant) for played in asked}
+    for name, inputs, critic in level_names(args.levels, args.critics, args.no_q):
+        calls[name] = await rebuilt(run, every, inputs, critic, game, services)
+    if args.obfuscated:
+        plain = await rebuilt(run, every, "none", "none", game, services)
+        calls[OBFUSCATED] = {where: (obfuscate(system), obfuscate(prompt)) for where, (system, prompt) in plain.items()}
+    problems = await rebuild_problems(run, every, game, services) if args.levels or args.obfuscated else []
+    asks = [
+        Ask(name if sample == 0 else f"{name}_seed{sample}", played, *calls[name][played.epoch, played.round], seed_of(played, sample))
+        for name in calls
+        for sample in args.sample_seeds
+        for played in asked
+    ]
+    return asks, problems
+
+
+async def rebuild_problems(run: TrainingRun, every: list[Game], game: TurnBasedGame, services: Services) -> list[str]:
+    # the run's own inputs and critic must give back its recorded calls, else the levels are not built as the training builds them
+    run_params = params(run)
+    if run_params.critic.kind is CriticType.LLM:
+        return []
+    own = await rebuilt(run, every, feedback_params(run).inputs, run_params.critic.to_string(), game, services)
+    differ = [where for where, call in own.items() if call != next((played.system, played.prompt) for played in every if (played.epoch, played.round) == where)]
+    if not differ:
+        return []
+    epoch, round_ = differ[0]
+    return [f"the rebuilt call differs from the recorded one in {len(differ)} of {len(own)} games (first: epoch {epoch}, game {round_}); see --dry-run"]
+
+
+def seed_of(game: Game, sample: int) -> int | None:
+    # 0: the game's own seed, which reproduces the recorded answer; another: a seed derived from it
+    if sample == 0 or game.seed is None:
+        return game.seed
+    return derive_seed(game.seed, "reask", sample)
+
+
+def answer_path(out: Path, name: str, game: Game) -> Path:
+    return out / name / f"epoch_{game.epoch}_game_{game.round}.json"
+
+
+async def answer(calls: Calls, model: ModelConfig, ask: Ask, deltas: list[float], path: Path, records: list[LLMCall]) -> list[str]:
+    # one answer, saved as soon as it arrives (a stopped run keeps it), with the keys, the solver's verdicts and V*'s TD errors the status needs;
+    # the new grade of every step, "none" for a step the answer leaves out
+    reply = await calls.structured("feedback", model, ask.system, ask.prompt, _Verdicts)
     by_step: dict[int, str] = {}
-    for verdict in answer.verdicts:
+    for verdict in reply.verdicts:
         by_step.setdefault(verdict.step, verdict.grade)
-    return [by_step.get(number, "none") for number in range(1, len(game.keys) + 1)]
-
-
-def answer_path(out: Path, variant: str, game: Game) -> Path:
-    return out / variant / f"epoch_{game.epoch}_game_{game.round}.json"
-
-
-async def answer(calls: Calls, model: ModelConfig, game: Game, earlier: list[Game], variant: str, path: Path, records: list[LLMCall]) -> list[str]:
-    # one answer, saved as soon as it arrives (a stopped run keeps it), with the keys and the solver's verdicts the status needs
-    graded = await ask(calls, model, game, earlier, variant)
+    graded = [by_step.get(number, "none") for number in range(1, len(ask.game.keys) + 1)]
     path.parent.mkdir(parents=True, exist_ok=True)
-    saved = {"epoch": game.epoch, "round": game.round, "variant": variant, "keys": game.keys, "optimal": game.optimal, "grades": graded}
+    game = ask.game
+    saved = {"epoch": game.epoch, "round": game.round, "variant": ask.name, "keys": game.keys, "optimal": game.optimal, "delta": deltas, "grades": graded}
     path.write_text(json.dumps(saved | {"calls": [record.to_dict() for record in records]}, indent=1))
     return graded
 
@@ -162,48 +311,66 @@ def agree(optimal: bool, grade: str) -> bool:
     return grade in (("good", "strong") if optimal else ("mistake", "dubious"))
 
 
+def agree_delta(delta: float, grade: str) -> bool:
+    # with the sign of V*'s TD error for this game: good or strong where it rose, mistake or dubious where it fell, neutral where it stayed
+    if abs(delta) < 1e-9:
+        return grade == "neutral"
+    return grade in (("good", "strong") if delta > 0 else ("mistake", "dubious"))
+
+
 def status(out: Path) -> dict[str, object]:
-    # the saved answers as plyservice's tables: per variant the agreement with the solver, then per variant, situation and kind of move the grades
-    rows: dict[tuple[str, str, bool], Counter[str]] = defaultdict(Counter)
-    answers: Counter[str] = Counter()
+    # the saved answers as plyservice's tables: per name the agreement with the solver (and with V*'s TD error), then per name, situation and kind
+    # of move the grades
+    graded: dict[str, list[tuple[str, bool, str, bool, float | None]]] = defaultdict(list)
+    answers: dict[str, int] = defaultdict(int)
     for path in sorted(out.glob("*/epoch_*_game_*.json")):
         saved = json.loads(path.read_text())
         answers[saved["variant"]] += 1
-        for key, optimal, grade in zip(saved["keys"], saved["optimal"], saved["grades"]):
-            rows[saved["variant"], key, optimal][grade] += 1
+        deltas = saved.get("delta") or [None] * len(saved["keys"])
+        for index, (key, optimal, grade, delta) in enumerate(zip(saved["keys"], saved["optimal"], saved["grades"], deltas)):
+            graded[saved["variant"]].append((key, optimal, grade, index > 0, delta))
 
-    def share(counters: list[tuple[bool, Counter[str]]]) -> float | None:
-        total = sum(sum(counter.values()) for _, counter in counters)
-        return sum(count for optimal, counter in counters for grade, count in counter.items() if agree(optimal, grade)) / total if total else None
+    def share(steps: list[tuple[str, bool, str, bool, float | None]]) -> float | None:
+        return sum(agree(optimal, grade) for _, optimal, grade, _, _ in steps) / len(steps) if steps else None
 
-    variants = [variant for variant in VARIANTS if variant in answers]
+    def share_delta(steps: list[tuple[str, bool, str, bool, float | None]]) -> float | None:
+        known = [(delta, grade) for _, _, grade, _, delta in steps if delta is not None]
+        return sum(agree_delta(delta, grade) for delta, grade in known) / len(known) if known else None
+
+    names = sorted(answers, key=lambda name: (name not in VARIANTS, VARIANTS.index(name) if name in VARIANTS else 0, name))
     summary = [
         {
-            "variant": variant,
-            "answers": answers[variant],
-            "optimal": share([(True, counter) for (name, _, optimal), counter in rows.items() if name == variant and optimal]),
-            "other": share([(False, counter) for (name, _, optimal), counter in rows.items() if name == variant and not optimal]),
-            "all": share([(optimal, counter) for (name, _, optimal), counter in rows.items() if name == variant]),
+            "variant": name,
+            "answers": answers[name],
+            "optimal": share([step for step in graded[name] if step[1]]),
+            "other": share([step for step in graded[name] if not step[1]]),
+            "all": share(graded[name]),
+            "later": share([step for step in graded[name] if step[3]]),
+            "delta": share_delta(graded[name]),
         }
-        for variant in variants
+        for name in names
     ]
+    rows: dict[tuple[str, str, bool], dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    for name in names:
+        for key, optimal, grade, _, _ in graded[name]:
+            rows[name, key, optimal][grade] += 1
     detail = [
-        {"variant": variant, "situation": key, "move": "optimal" if optimal else "not optimal", "n": sum(counter.values())}
-        | {grade: counter.get(grade, 0) for grade in (*GRADES, "none")}
-        | {"agree": share([(optimal, counter)])}
-        for variant in variants
-        for (name, key, optimal), counter in rows.items()
-        if name == variant
+        {"variant": name, "situation": key, "move": "optimal" if optimal else "not optimal", "n": sum(counts.values())}
+        | {grade: counts.get(grade, 0) for grade in (*GRADES, "none")}
+        | {"agree": sum(count for grade, count in counts.items() if agree(optimal, grade)) / sum(counts.values())}
+        for (name, key, optimal), counts in rows.items()
     ]
     rate = {"rate": True}
+    columns = (("optimal", "optimal moves"), ("other", "other moves"), ("all", "all moves"), ("later", "all but each game's first"), ("delta", "with V*'s TD error"))
     return {
         "kind": "tables",
         "tables": [
             {
-                "title": "agreement with the solver, per variant",
-                "note": "share of graded moves where the feedback agrees: good or strong on an optimal move, mistake or dubious on another",
+                "title": "agreement with the solver, per variant and level",
+                "note": "share of graded moves where the feedback agrees: good or strong on an optimal move, mistake or dubious on another; the last"
+                " column against the sign of V*'s TD error in the same game (neutral where it is 0), what the classical estimator would use",
                 "columns": [{"key": "variant", "label": "variant"}, {"key": "answers", "label": "answers", "digits": 0}]
-                + [{"key": key, "label": label} | rate for key, label in (("optimal", "optimal moves"), ("other", "other moves"), ("all", "all moves"))],
+                + [{"key": key, "label": label} | rate for key, label in columns],
                 "rows": summary,
             },
             {
@@ -221,67 +388,97 @@ async def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     add_training_source_args(parser)
     parser.add_argument("--out", type=Path, required=True, help="folder of the answers, one file each (relative to the repository: analysis/...)")
-    parser.add_argument("--variants", nargs="+", choices=VARIANTS, default=["as_run", "history"], help="variants to ask, each over the same games (default as_run history)")
-    parser.add_argument("--epochs", nargs="+", type=int, help="epochs whose training games are asked again (default: all); the history still counts every earlier game")
+    parser.add_argument(
+        "--variants",
+        nargs="*",
+        choices=VARIANTS,
+        default=["as_run", "history"],
+        help="variants of the first round, each over the same games (default as_run history; none: --variants alone)",
+    )
+    parser.add_argument("--levels", nargs="*", choices=list(LEVELS), default=[], help="levels of the information ladder (default none)")
+    parser.add_argument("--critics", nargs="+", choices=list(CRITICS_OF_LEVELS), default=list(CRITICS_OF_LEVELS), help="critics of the levels from L2 (default both)")
+    parser.add_argument("--no-q", action="store_true", help="leave the critic's values of the other moves out of the levels (L3 is then L2)")
+    parser.add_argument("--obfuscated", action="store_true", help="also ask L0 with the game renamed")
+    parser.add_argument("--sample-seeds", nargs="+", type=int, default=[0], help="seeds to ask each call with: 0 the game's own, others derived from it (default 0)")
+    parser.add_argument("--epochs", nargs="+", type=int, help="epochs whose training games are asked again (default: all); the history and the critic still see every earlier game")
     parser.add_argument("--concurrency", type=int, default=10, help="requests in flight per provider (default 10)")
-    parser.add_argument("--check", action="store_true", help="print what would be asked (answers planned and left, the model, the outputs), then exit; no calls")
+    parser.add_argument(
+        "--check", action="store_true", help="print what would be asked (answers planned and left, the model, the outputs) and check the rebuild, then exit; no calls"
+    )
     parser.add_argument("--json", action="store_true", help="with --check: print the plan as JSON")
     parser.add_argument("--status", action="store_true", help="print the tables of the saved answers as JSON, then exit; no calls")
-    parser.add_argument("--dry-run", action="store_true", help="print the changed call of the last selected game per variant, no calls")
+    parser.add_argument("--dry-run", action="store_true", help="print the call of the last selected game per name, no calls")
     parser.add_argument("--max-chars", type=int, default=70, help="cut each key to this length (default 70)")
     args = parser.parse_args()
 
     if args.status:
         print(json.dumps(status(args.out)))
         return
+    if not (args.variants or args.levels or args.obfuscated):
+        raise SystemExit("nothing to ask: name --variants, --levels or --obfuscated")
     op = build_op(concurrency=args.concurrency)
+    services = Services(op.llm, op.registry.solvable)
     harness = training_from_args(op, args)
     runs = harness.get_results().runs
     if len(runs) != 1:
         raise SystemExit(f"select exactly one run with --experiment and --trainees (selected {len(runs)})")
     run = runs[0]
-    model = feedback_model(run)
-    every = load_games(harness, run, None)
-    games = [game for game in every if args.epochs is None or game.epoch in args.epochs]
-    planned = [(variant, game) for variant in args.variants for game in games]
-    left = [(variant, game) for variant, game in planned if not answer_path(args.out, variant, game).exists()]
+    feedback_model = feedback_params(run).model
+    assert feedback_model is not None
+    model = feedback_model.config
+    engine = op.registry.build_engine(run.game)
+    engine.reset()
+    every = load_games(harness, run, services)
+    asks, problems = await plan(args, run, every, engine.game, services)
+    if not asks:
+        problems.append(f"no training game of {run.trainee.to_string()} has a recorded feedback call")
+    left = [ask for ask in asks if not answer_path(args.out, ask.name, ask.game).exists()]
 
     if args.check:
-        problems = [] if games else [f"no training game of {run.trainee.to_string()} has a recorded feedback call"]
-        plan = {"planned": len(planned), "remaining": len(left), "unit": "answers", "models": [f"{model.provider.value}:{model.model_name}"], "outputs": [str(args.out)]}
-        print(json.dumps(plan | {"problems": problems}) if args.json else f"{len(left)} of {len(planned)} answers to ask, model {model.to_string()}, into {args.out}")
+        plan_json = {"planned": len(asks), "remaining": len(left), "unit": "answers", "models": [f"{model.provider.value}:{model.model_name}"], "outputs": [str(args.out)]}
+        print(
+            json.dumps(plan_json | {"problems": problems})
+            if args.json
+            else f"{len(left)} of {len(asks)} answers to ask, model {model.to_string()}, into {args.out}; problems: {problems or 'none'}"
+        )
         raise SystemExit(1 if problems else 0)
-    print(f"{run.trainee.to_string()}\n{len(games)} training games with a recorded feedback call; {len(left)} of {len(planned)} answers to ask", flush=True)
+    if problems:
+        raise SystemExit("; ".join(problems))
+    names = list(dict.fromkeys(ask.name for ask in asks))
+    print(
+        f"{run.trainee.to_string()}\n{len(every)} training games, {len({id(ask.game) for ask in asks})} with a recorded feedback call; {len(left)} of {len(asks)} answers to ask",
+        flush=True,
+    )
     if args.dry_run:
-        game = games[-1]
-        for variant in args.variants:
-            system, prompt = changed(game, every[: every.index(game)], variant)
-            print(f"\n== {variant}: epoch {game.epoch}, game {game.round}\n-- system\n{system}\n-- prompt\n{prompt}")
+        for name in names:
+            ask = [ask for ask in asks if ask.name == name][-1]
+            print(f"\n== {name}: epoch {ask.game.epoch}, game {ask.game.round}\n-- system\n{ask.system}\n-- prompt\n{ask.prompt}")
         return
 
-    done, failed = len(planned) - len(left), 0
+    deltas = await oracle_deltas(every, engine.game, services)
+    done, failed = len(asks) - len(left), 0
 
-    async def one(variant: str, game: Game) -> None:
+    async def one(ask: Ask) -> None:
         nonlocal done, failed
         records: list[LLMCall] = []
         try:
-            await answer(Calls(op.llm, game.seed, records.append), model, game, every[: every.index(game)], variant, answer_path(args.out, variant, game), records)
+            await answer(Calls(op.llm, ask.seed, records.append), model, ask, deltas[ask.game.epoch, ask.game.round], answer_path(args.out, ask.name, ask.game), records)
         except Exception as error:
             # left unsaved, so a run again asks it again; the run ends with an error once the others are done
             failed += 1
-            print(f"warning: {variant}, epoch {game.epoch}, game {game.round}: {type(error).__name__}: {error}", flush=True)
+            print(f"warning: {ask.name}, epoch {ask.game.epoch}, game {ask.game.round}: {type(error).__name__}: {error}", flush=True)
             return
         done += 1
-        print(f"progress: {done}/{len(planned)}", flush=True)
+        print(f"progress: {done}/{len(asks)}", flush=True)
 
-    await asyncio.gather(*(one(variant, game) for variant, game in left))
-    for variant in args.variants:
-        print(f"\n== {variant}: grades against the solver (agree: good or strong on an optimal move, mistake or dubious on another)")
+    await asyncio.gather(*(one(ask) for ask in left))
+    for name in names:
+        print(f"\n== {name}: grades against the solver (agree: good or strong on an optimal move, mistake or dubious on another)")
         counts: dict[str, dict[bool, Counter[str]]] = defaultdict(lambda: defaultdict(Counter))
-        for game in games:
-            path = answer_path(args.out, variant, game)
-            if path.exists():
-                for key, optimal, grade in zip(game.keys, game.optimal, json.loads(path.read_text())["grades"]):
+        for ask in asks:
+            path = answer_path(args.out, name, ask.game)
+            if ask.name == name and path.exists():
+                for key, optimal, grade in zip(ask.game.keys, ask.game.optimal, json.loads(path.read_text())["grades"]):
                     counts[key][optimal][grade] += 1
         grade_table(counts, args.max_chars)
         graded = [(optimal, grade) for by_optimal in counts.values() for optimal, counter in by_optimal.items() for grade in counter.elements()]

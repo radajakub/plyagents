@@ -33,7 +33,9 @@ def tic_tac_toe(tmp_path, monkeypatch) -> TurnBasedEngine:
 @pytest.fixture
 def services() -> Services:
     # a router without providers: building the tabular and oracle components needs one, calling it does not happen
-    return Services(LLM(LLMConfig()))
+    registry = Registry()
+    register_builtin_games(registry)
+    return Services(LLM(LLMConfig()), registry.solvable)
 
 
 @pytest.fixture

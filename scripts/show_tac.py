@@ -8,6 +8,9 @@ Sections (--show, default summary moves):
     games    per game: the actor's key, the memory it read, its reasoning and move against the solver's, the feedback, the memory
              writes, the critic's assessments and a summary of the learner's LLM calls
     feedback per situation: the grades of the feedback model on the training moves, split by whether the solver calls the move optimal
+    reference per epoch and situation: the counts the player recorded beside the text (visits, share, mean outcome and its spread per move,
+             Q* where solved) and how often the feedback's grade has the sign of the counted advantage (mean outcome of the move minus that of
+             the situation, from the counts before the game) and agrees with the solver (Q* = V*)
 
 Examples:
     uv run python scripts/show_tac.py --experiment tac_monty_hall
@@ -39,9 +42,10 @@ from plybench.player.learnable import LEARNER_CALLS
 from plybench.trackers.result_tracker import ResultTracker
 
 from plyagents.tac.model.feedback import GRADES
+from plyagents.tac.model.reference import MoveCounts, counts_from_dict
 from plyagents.tac.player import STATE_FILE, UPDATE_FILE
 
-SECTIONS = ("summary", "moves", "memory", "games", "feedback")
+SECTIONS = ("summary", "moves", "memory", "games", "feedback", "reference")
 SUMMARY_METRICS = (MetricName.WIN_RATE, MetricName.OPTIMALITY_RATE_NON_TRIVIAL, MetricName.FAIL_RATE)
 
 
@@ -156,6 +160,14 @@ def entries(state: Any) -> dict[str, dict[str, Any]]:
     return state if isinstance(state, dict) else {}
 
 
+def tables(state: dict[str, Any]) -> dict[str, Any]:
+    # the parts of a checkpoint the memory section prints, by name: the tabular critic's V and Q apart (its state holds both)
+    critic = state.get("critic")
+    if isinstance(critic, dict) and set(critic) == {"values", "action_values"}:
+        return {"actor": state.get("actor"), "critic": critic["values"], "critic Q": critic["action_values"]}
+    return {"actor": state.get("actor"), "critic": critic}
+
+
 def estimates(entry: dict[str, Any]) -> str:
     # a table entry: the tabular critic's V(z), one estimate, or the tabular actor's Q(z, .), one estimate per action
     if "value" in entry:
@@ -173,8 +185,8 @@ def show_memory(harness: TrainingHarness, run: TrainingRun, epochs: list[int], a
         state = json.loads(path.read_text())
         previous_path = harness.path_builder.checkpoint(harness.experiment, run, epoch - 1) / STATE_FILE
         previous = json.loads(previous_path.read_text()) if epoch > 0 and previous_path.exists() else {}
-        for component in ("actor", "critic"):
-            current, before = entries(state.get(component)), entries(previous.get(component))
+        for component, part in tables(state).items():
+            current, before = entries(part), entries(tables(previous).get(component))
             if not current and not before:
                 continue
             changed = {key: entry for key, entry in current.items() if all_entries or before.get(key) != entry}
@@ -294,6 +306,69 @@ def show_feedback(harness: TrainingHarness, results: TrainingResults, run: Train
     grade_table(counts, limit)
 
 
+def advantage_agrees(grade: str, advantage: float) -> bool:
+    # as reask_feedback.py's agreement with the TD error: good or strong where it is positive, mistake or dubious where negative, neutral at 0
+    if abs(advantage) < 1e-9:
+        return grade == "neutral"
+    return grade in (("good", "strong") if advantage > 0 else ("mistake", "dubious"))
+
+
+def counted_advantage(counts: dict[str, MoveCounts], move: str) -> float | None:
+    # the move's mean outcome minus the situation's, from the counts before the game; None while the move has no visit
+    played = counts.get(move)
+    if played is None or played.visits == 0:
+        return None
+    return played.total / played.visits - sum(other.total for other in counts.values()) / sum(other.visits for other in counts.values())
+
+
+def show_reference(harness: TrainingHarness, run: TrainingRun, epochs: list[int], limit: int | None) -> None:
+    print("== Reference per epoch: the counts after the epoch's training games, and the feedback's grades against the counted advantage and the solver")
+    for epoch in [epoch for epoch in epochs if epoch > 0]:
+        path = harness.path_builder.checkpoint(harness.experiment, run, epoch) / STATE_FILE
+        state = json.loads(path.read_text()) if path.exists() else {}
+        if "reference" not in state:
+            print(f"-- epoch {epoch}: no reference in {path} (a run from before it was recorded)")
+            continue
+        learner = harness.path_builder.learner_dir(harness.experiment, run, epoch)
+        updates = sorted(learner.glob(f"game_*/{UPDATE_FILE}"), key=lambda update: int(update.parent.name.removeprefix("game_")))
+        # key -> the solved values of its legal moves, and the agreement tallies (graded, with the counted sign, counted at all, with the solver, solved at all)
+        solved: dict[str, dict[str, float]] = {}
+        tally: dict[str, Counter[str]] = defaultdict(Counter)
+        for update in updates:
+            for step in (json.loads(update.read_text()).get("reference") or {}).get("steps", []):
+                key, move, grade = step["key"], step["move"], step["grade"]
+                if step["solved"] is not None and step["solved"]["action_values"] is not None:
+                    solved[key] = dict(zip(step["legal"], step["solved"]["action_values"]))
+                if move is None or grade is None:
+                    continue
+                tally[key]["graded"] += 1
+                counted = counted_advantage(counts_from_dict(step["counts"]), move)
+                if counted is not None:
+                    tally[key]["counted"] += 1
+                    tally[key]["counted_agree"] += advantage_agrees(grade, counted)
+                if step["solved"] is not None and step["solved"]["value"] is not None:
+                    optimal = abs(step["solved"]["action_values"][step["legal"].index(move)] - step["solved"]["value"]) < 1e-9
+                    tally[key]["solver"] += 1
+                    tally[key]["solver_agree"] += grade in (("good", "strong") if optimal else ("mistake", "dubious"))
+        print(f"-- epoch {epoch}: {len(updates)} training games")
+        for key, raw in state["reference"].items():
+            counts = counts_from_dict(raw)
+            total = sum(move_counts.visits for move_counts in counts.values())
+            values = solved.get(key, {})
+            best = max(values.values(), default=None)
+            print(f"   {cut(key, limit)}")
+            print(f"     {'move':<16}{'visits':>8}{'share':>8}{'mean':>8}{'sd':>8}{'Q*':>8}")
+            for move, move_counts in counts.items():
+                mean = move_counts.total / move_counts.visits
+                spread = max(move_counts.squares / move_counts.visits - mean * mean, 0.0) ** 0.5
+                star = f"{values[move]:+.2f}{'*' if values[move] == best else ' '}" if move in values else "-"
+                print(f"     {move:<16}{move_counts.visits:>8}{move_counts.visits / total:>8.2f}{mean:>+8.2f}{spread:>8.2f}{star:>8}")
+            counted = tally[key]
+            if counted["graded"]:
+                shares = [f"{name} {counted[f'{name}_agree'] / counted[name]:.2f} of {counted[name]}" if counted[name] else f"{name} -" for name in ("counted", "solver")]
+                print(f"     feedback: {counted['graded']} graded this epoch; agrees with the counted advantage's sign and with the solver: {', '.join(shares)}")
+
+
 def grade_table(counts: dict[str, dict[bool, Counter[str]]], limit: int | None) -> None:
     # per key: the grades given to optimal moves and to other moves, and the share that agrees with the solver; also used by reask_feedback.py
     columns = (*GRADES, "none")
@@ -348,6 +423,8 @@ def main() -> None:
             show_games(harness, results, run, replayer, args.phase or "train", [epoch for epoch in epochs if epoch > 0 or args.phase == "test"], args.rounds, limit)
         if "feedback" in args.show:
             show_feedback(harness, results, run, replayer, epochs, limit)
+        if "reference" in args.show:
+            show_reference(harness, run, epochs, limit)
 
 
 if __name__ == "__main__":

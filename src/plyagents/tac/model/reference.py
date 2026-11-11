@@ -1,0 +1,162 @@
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from typing import Any
+
+from plybench.core.minimax import AVQCache
+
+from plyagents.tac.model.assessment import Assessment
+from plyagents.tac.model.feedback import Grade
+from plyagents.tac.model.step import TACStep
+
+
+def result(outcome: float) -> str:
+    # the word for an outcome, by its sign (a shaped win, e.g. with a length penalty, is still a win)
+    return "win" if outcome > 0 else "loss" if outcome < 0 else "draw"
+
+
+@dataclass(frozen=True)
+class MoveCounts:
+    # the visits of one move at one key: the results of their games by word, and the sum and the sum of squares of the shaped
+    # outcome; raw counts only, every statistic (Q, visit share, variance) is computed in the analysis
+    results: Mapping[str, int] = field(default_factory=dict)
+    total: float = 0.0
+    squares: float = 0.0
+
+    @property
+    def visits(self) -> int:
+        return sum(self.results.values())
+
+    def plus(self, outcome: float) -> MoveCounts:
+        word = result(outcome)
+        return MoveCounts({**self.results, word: self.results.get(word, 0) + 1}, self.total + outcome, self.squares + outcome * outcome)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"results": dict(self.results), "sum": self.total, "sum_sq": self.squares}
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> MoveCounts:
+        return cls(dict(data["results"]), data["sum"], data["sum_sq"])
+
+
+# per move played at one key, in the order first played
+type KeyCounts = Mapping[str, MoveCounts]
+
+
+def counts_to_dict(counts: KeyCounts) -> dict[str, Any]:
+    return {move: move_counts.to_dict() for move, move_counts in counts.items()}
+
+
+def counts_from_dict(data: dict[str, Any]) -> dict[str, MoveCounts]:
+    return {move: MoveCounts.from_dict(move_counts) for move, move_counts in data.items()}
+
+
+class Reference:
+    # the numbers kept beside the text components, never shown to any of them except as the feedback's history: per key and
+    # move, the counts of every training visit so far (every visit of a game counts)
+    def __init__(self, counts: dict[str, dict[str, MoveCounts]] | None = None) -> None:
+        self.counts: dict[str, dict[str, MoveCounts]] = counts if counts is not None else {}
+
+    def before(self, key: str) -> KeyCounts:
+        # a copy: the counts are immutable, so the snapshot stays as it was after later commits
+        return dict(self.counts.get(key, {}))
+
+    def add(self, key: str, move: str, outcome: float) -> None:
+        moves = self.counts.setdefault(key, {})
+        moves[move] = moves.get(move, MoveCounts()).plus(outcome)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {key: counts_to_dict(moves) for key, moves in self.counts.items()}
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Reference:
+        return cls({key: counts_from_dict(moves) for key, moves in data.items()})
+
+
+@dataclass(frozen=True)
+class Values:
+    # a value of the state and of each legal move (aligned with TACStep.legal, None where there is none)
+    value: float | None
+    action_values: tuple[float | None, ...] | None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"value": self.value, "action_values": list(self.action_values) if self.action_values is not None else None}
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Values:
+        action_values = data["action_values"]
+        return cls(data["value"], tuple(action_values) if action_values is not None else None)
+
+
+def solved_values(cache: AVQCache, step: TACStep) -> Values | None:
+    # V* and Q* of the step's true state; None where the solver has no entry for it
+    avq = cache[step.player, step.os_state]
+    if avq is None:
+        return None
+    return Values(avq.V(), tuple(avq.Q(number) for number in step.legal_numbers))
+
+
+@dataclass(frozen=True)
+class ReferenceStep:
+    # one step of a training game with the numbers beside its text: the counts of every move at its key before the game (what
+    # the components knew when they answered), the critic's numbers, V* and Q* when the game is solved, and the feedback's grade.
+    # step is 1-based, as the feedback model's verdicts and the game's steps are numbered
+    step: int
+    key: str
+    move: str | None
+    legal: tuple[str, ...]
+    counts: KeyCounts
+    critic: Values
+    solved: Values | None
+    grade: Grade | None
+
+    @classmethod
+    def of(cls, number: int, step: TACStep, counts: KeyCounts, assessment: Assessment, solved: Values | None, grade: Grade | None) -> ReferenceStep:
+        return cls(number, step.key, step.action, step.legal, counts, Values(assessment.value, assessment.action_values), solved, grade)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "step": self.step,
+            "key": self.key,
+            "move": self.move,
+            "legal": list(self.legal),
+            "counts": counts_to_dict(self.counts),
+            "critic": self.critic.to_dict(),
+            "solved": self.solved.to_dict() if self.solved is not None else None,
+            "grade": self.grade,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ReferenceStep:
+        solved = data["solved"]
+        return cls(
+            data["step"],
+            data["key"],
+            data["move"],
+            tuple(data["legal"]),
+            counts_from_dict(data["counts"]),
+            Values.from_dict(data["critic"]),
+            Values.from_dict(solved) if solved is not None else None,
+            data["grade"],
+        )
+
+
+@dataclass(frozen=True)
+class ReferenceUpdate:
+    # one training game's record: its steps and the shaped outcome. Not a component's update: the player keeps it for every config
+    steps: tuple[ReferenceStep, ...]
+    outcome: float
+
+    def apply_to(self, reference: Reference) -> None:
+        # commit: each played step counts once toward its key and move
+        for step in self.steps:
+            if step.move is not None:
+                reference.add(step.key, step.move, self.outcome)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"outcome": self.outcome, "result": result(self.outcome), "steps": [step.to_dict() for step in self.steps]}
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ReferenceUpdate:
+        return cls(tuple(ReferenceStep.from_dict(step) for step in data["steps"]), data["outcome"])

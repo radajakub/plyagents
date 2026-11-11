@@ -31,12 +31,19 @@ class Calls:
         return derive_seed(self.seed, role, index) if self.seed is not None else None
 
     async def text(self, role: str, model: ModelConfig, system: str, prompt: str) -> str:
+        return (await self.reasoned_text(role, model, system, prompt))[0]
+
+    async def reasoned_text(self, role: str, model: ModelConfig, system: str, prompt: str) -> tuple[str, str]:
+        # the answer and the model's reasoning trace ("" when it gives none)
         system_message, messages = LLMMessage.system(system), [LLMMessage.user(prompt)]
         response = await self.llm.generate(model, system_message, messages, seed=self._seed(role))
         self.record(LLMCall.from_response(role, model, system_message, messages, response))
-        return response.output_text
+        return response.output_text, "\n".join(response.reasoning)
 
     async def structured[S: BaseModel](self, role: str, model: ModelConfig, system: str, prompt: str, schema: type[S]) -> S:
+        return (await self.reasoned_structured(role, model, system, prompt, schema))[0]
+
+    async def reasoned_structured[S: BaseModel](self, role: str, model: ModelConfig, system: str, prompt: str, schema: type[S]) -> tuple[S, str]:
         system_message, messages = LLMMessage.system(system), [LLMMessage.user(prompt)]
         for attempt in range(1, ATTEMPTS + 1):
             try:
@@ -49,5 +56,5 @@ class Calls:
                 print(f"warning: {role}: unusable answer (attempt {attempt}/{ATTEMPTS}): {str(error).splitlines()[0]}", file=sys.stderr)
             else:
                 self.record(LLMCall.from_response(role, model, system_message, messages, response))
-                return response.resolve_structured_output(schema)
+                return response.resolve_structured_output(schema), "\n".join(response.reasoning)
         raise ValueError(f"{role}: no usable answer from {model.model_name} after {ATTEMPTS} attempts")

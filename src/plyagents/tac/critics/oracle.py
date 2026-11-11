@@ -24,16 +24,16 @@ class OracleCritic(Critic[ComponentUpdate]):
         # again per game: a sampled variant is solved per instance (load_or_solve keeps each in memory)
         self._cache = load_or_solve(game)
 
-    def _value(self, step: TACStep) -> float:
+    def _assess(self, step: TACStep) -> Assessment:
         assert self._cache is not None, "initialize must be called before the critic assesses"
         avq = self._cache[step.player, step.os_state]
         if avq is None:
             raise ValueError(f"No solved value for player {step.player} in state {step.os_state!r}")
-        return avq.V()
+        value = avq.V()
+        return Assessment(value, f"value {value:+g}", tuple(avq.Q(number) for number in step.legal_numbers))
 
     async def assess(self, steps: list[TACStep], calls: Calls) -> list[Assessment]:
-        values = [self._value(step) for step in steps]
-        return [Assessment(value, f"value {value:+g}") for value in values]
+        return [self._assess(step) for step in steps]
 
     def describe(self) -> str:
-        return "V*(s) of the solved game (privileged: reads the true state)"
+        return "V*(s) and Q*(s, a) of the solved game (privileged: reads the true state)"

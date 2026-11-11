@@ -44,6 +44,12 @@ class FeedbackType(ExtendedEnum):
     LLM = "llm"
 
 
+class ReferenceType(ExtendedEnum):
+    # what the player's reference record holds besides the counts: SOLVED adds V* and Q* when the game is solvable
+    SOLVED = "solved"
+    COUNTS = "counts"
+
+
 class RewardType(ExtendedEnum):
     RESULT = "result"
     LENGTH_PENALTY = "length_penalty"

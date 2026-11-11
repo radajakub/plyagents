@@ -27,30 +27,47 @@ class TabularCriticParams(ComponentParams):
 
 
 class TabularCritic(Critic[TableUpdate]):
-    # Monte Carlo: V(z) <- V(z) + beta (G - V(z)) for every visited key
+    # Monte Carlo: V(z) <- V(z) + beta (G - V(z)) for every visited key, and Q(z, a) <- Q(z, a) + beta (G - Q(z, a)) for the move
+    # played, as the tabular actor keeps it (one table per key); Q is kept whether or not anything reads it
     def __init__(self, scheduler: Scheduler) -> None:
         self.scheduler = scheduler
         self.table = Table()
+        self.actions: dict[str, Table] = {}
+
+    def _action_values(self, step: TACStep) -> tuple[float | None, ...]:
+        # None for a move never played here: the critic has no estimate of it
+        estimates = self.actions.get(step.key, Table()).estimates
+        return tuple(estimates[action].value if action in estimates else None for action in step.legal)
 
     async def assess(self, steps: list[TACStep], calls: Calls) -> list[Assessment]:
         values = [self.table.get(step.key).value for step in steps]
-        return [Assessment(value, f"value {value:+.2f}") for value in values]
+        return [Assessment(value, f"value {value:+.2f}", self._action_values(step)) for step, value in zip(steps, values)]
 
     async def propose(self, steps: list[TACStep], outcome: float, feedback: list[StepFeedback], calls: Calls) -> TableUpdate | None:
-        return TableUpdate(tuple(Sample(step.key, outcome) for step in steps))
+        actions = tuple(Sample(step.key, outcome, step.action) for step in steps if step.action is not None)
+        return TableUpdate(tuple(Sample(step.key, outcome) for step in steps) + actions)
 
     def commit(self, update: TableUpdate) -> None:
         for sample in update.samples:
-            self.table.update(sample.key, sample.target, self.scheduler.step_size)
+            if sample.action is None:
+                self.table.update(sample.key, sample.target, self.scheduler.step_size)
+            else:
+                self.actions.setdefault(sample.key, Table()).update(sample.action, sample.target, self.scheduler.step_size)
 
     def parse_update(self, data: dict[str, Any]) -> TableUpdate:
         return TableUpdate.from_dict(data)
 
     def state(self) -> dict[str, Any] | None:
-        return self.table.to_dict()
+        return {"values": self.table.to_dict(), "action_values": {key: table.to_dict() for key, table in self.actions.items()}}
 
     def load_state(self, state: dict[str, Any] | None) -> None:
-        self.table = Table.from_dict(state or {})
+        state = state or {}
+        # a checkpoint from before Q was kept holds V alone, keyed by situation
+        if set(state) != {"values", "action_values"}:
+            self.table, self.actions = Table.from_dict(state), {}
+            return
+        self.table = Table.from_dict(state["values"])
+        self.actions = {key: Table.from_dict(table) for key, table in state["action_values"].items()}
 
     def describe(self) -> str:
-        return f"Monte Carlo V(z) toward G, {self.scheduler.describe()}"
+        return f"Monte Carlo V(z) and Q(z, a) of the moves played toward G, {self.scheduler.describe()}"

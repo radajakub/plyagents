@@ -13,6 +13,8 @@ FEEDBACKS: Collection[FeedbackType, Feedback] = Collection(
     {
         FeedbackType.NONE: ComponentSpec(NoParams, lambda params, services: NoFeedback()),
         FeedbackType.ORACLE: ComponentSpec(NoParams, lambda params, services: OracleFeedback()),
-        FeedbackType.LLM: ComponentSpec(LLMFeedbackParams, lambda params, services: LLMFeedback(require_model(params.model, "llm feedback", services), params.lesson_chars)),
+        FeedbackType.LLM: ComponentSpec(
+            LLMFeedbackParams, lambda params, services: LLMFeedback(require_model(params.model, "llm feedback", services), params.lesson_chars, params.shown)
+        ),
     },
 )

@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from plybench.core.interface import InterfaceAction, InterfaceObservation
+from plybench.trackers.step_data import StepData
 
 
 @dataclass(frozen=True)
@@ -21,6 +22,8 @@ class TACStep:
     context: str | None = None
     # the rules of the game as an LLM is given them (the adapter's head prompt); kept with the player's first step of a game only
     rules: str | None = None
+    # what the actor thought before the move (an LLM actor's reasoning trace, else its full output); read from the step data plybench records
+    reasoning: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {**asdict(self), "legal": list(self.legal), "legal_numbers": list(self.legal_numbers)}
@@ -37,6 +40,7 @@ class TACStep:
             tuple(data.get("legal_numbers", ())),
             data.get("context"),
             data.get("rules"),
+            data.get("reasoning") or StepData.from_dict(data).thinking or None,
         )
 
 

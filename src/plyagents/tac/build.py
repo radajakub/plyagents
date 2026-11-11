@@ -11,8 +11,10 @@ from plyagents.tac.actors.build import ACTORS
 from plyagents.tac.actors.tabular import TabularActorParams
 from plyagents.tac.configs.components import Services
 from plyagents.tac.critics.build import CRITICS
-from plyagents.tac.enums import CriticType, TargetType
+from plyagents.tac.critics.llm import LLMCriticParams
+from plyagents.tac.enums import CriticType, ReferenceType, TargetType
 from plyagents.tac.feedback.build import FEEDBACKS
+from plyagents.tac.feedback.llm import LLMFeedbackParams
 from plyagents.tac.params import TACParams
 from plyagents.tac.player import TACPlayer
 from plyagents.tac.rewards.build import REWARDS
@@ -36,6 +38,15 @@ def build_tac_player(game: TurnBasedGame, player_config: PlayerConfig, identifie
     if isinstance(actor, TabularActorParams) and actor.target.kind is TargetType.CRITIC and params.critic.kind in (CriticType.NONE, CriticType.LLM):
         raise ValueError("target=critic needs a critic that gives values (critic=oracle or critic=tabular)")
 
+    # the feedback's inputs that need numbers from the critic, checked here for the same reason
+    feedback, critic = params.feedback.params, params.critic.params
+    if isinstance(feedback, LLMFeedbackParams):
+        numbers = params.critic.kind in (CriticType.ORACLE, CriticType.TABULAR) or (isinstance(critic, LLMCriticParams) and critic.value)
+        if "delta" in feedback.shown and not numbers:
+            raise ValueError("feedback inputs=delta needs a critic that gives numbers (critic=oracle, critic=tabular or critic=llm[value=true])")
+        if "q" in feedback.shown and params.critic.kind not in (CriticType.ORACLE, CriticType.TABULAR):
+            raise ValueError("feedback inputs=q needs a critic with action values (critic=oracle or critic=tabular)")
+
     player = TACPlayer(
         player_config,
         identifier,
@@ -47,6 +58,7 @@ def build_tac_player(game: TurnBasedGame, player_config: PlayerConfig, identifie
         SELECTORS.build(params.train_selector, services),
         SELECTORS.build(params.eval_selector, services),
         params.key,
+        params.reference is ReferenceType.SOLVED and services.solvable(game.game_type),
     )
     player.prepare(game)
 
@@ -69,6 +81,7 @@ def describe_tac_player(spec: str, player: TACPlayer, params: TACParams) -> str:
         ("eval selector", params.eval_selector.to_string(), player.selectors[Mode.EVAL].describe()),
         ("reward", params.reward.to_string(), player.shaper.describe()),
         ("key", params.key.value, "the observation text in this formalism, for retrieval only"),
+        ("reference", params.reference.value, "counts per key and move" + (", V* and Q*" if player.solved else "") + ", recorded per game, shown to no component"),
     ]
     width = max(len(role) for role, _, _ in rows)
     return "\n".join([f"TAC player {spec}", *(f"  {role:<{width}}  {config}: {summary}" for role, config, summary in rows)])

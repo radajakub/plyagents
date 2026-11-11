@@ -5,6 +5,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from plyagents.tac.model.reference import ReferenceUpdate
+
 
 class ComponentUpdate(ABC):
     # what one game teaches one learning component: a frozen dataclass, written as a dict and parsed back equal by its component
@@ -15,14 +17,22 @@ class ComponentUpdate(ABC):
 
 @dataclass(frozen=True)
 class TACUpdate:
-    # what one game teaches, one part per learning component; None for a component that does not learn
+    # what one game teaches, one part per learning component (None for a component that does not learn), and the game's reference
+    # record, the numbers beside the text (None in an update written before it existed)
     actor: ComponentUpdate | None
     critic: ComponentUpdate | None
+    reference: ReferenceUpdate | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {"actor": self.actor.to_dict() if self.actor else None, "critic": self.critic.to_dict() if self.critic else None}
+        data = {"actor": self.actor.to_dict() if self.actor else None, "critic": self.critic.to_dict() if self.critic else None}
+        return data | ({"reference": self.reference.to_dict()} if self.reference else {})
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], actor: Callable[[dict[str, Any]], ComponentUpdate], critic: Callable[[dict[str, Any]], ComponentUpdate]) -> TACUpdate:
-        # each part is parsed by the component that wrote it
-        return cls(actor(data["actor"]) if data["actor"] is not None else None, critic(data["critic"]) if data["critic"] is not None else None)
+        # each component's part is parsed by the component that wrote it
+        reference = data.get("reference")
+        return cls(
+            actor(data["actor"]) if data["actor"] is not None else None,
+            critic(data["critic"]) if data["critic"] is not None else None,
+            ReferenceUpdate.from_dict(reference) if reference is not None else None,
+        )

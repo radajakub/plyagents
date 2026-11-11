@@ -14,7 +14,7 @@ from plyagents.tac.actors.llm import LLMActorParams
 from plyagents.tac.configs.components import ComponentConfig
 from plyagents.tac.critics.build import CRITICS
 from plyagents.tac.critics.llm import LLMCriticParams
-from plyagents.tac.enums import ActorType, CriticType, FeedbackType, RewardType, SelectorType
+from plyagents.tac.enums import ActorType, CriticType, FeedbackType, ReferenceType, RewardType, SelectorType
 from plyagents.tac.feedback.build import FEEDBACKS
 from plyagents.tac.feedback.llm import LLMFeedbackParams
 from plyagents.tac.rewards.build import REWARDS
@@ -25,7 +25,7 @@ from plyagents.tac.utils.options import read_options
 MAX_SUFFIX = 160
 HASH_LENGTH = 12
 
-_OPTIONS = {"actor", "critic", "feedback", "train_selector", "eval_selector", "reward", "key", "checkpoint", "debug"}
+_OPTIONS = {"actor", "critic", "feedback", "train_selector", "eval_selector", "reward", "key", "reference", "checkpoint", "debug"}
 
 
 @dataclass(frozen=True, eq=True)
@@ -39,6 +39,9 @@ class TACParams(CheckpointedParams):
     reward: ComponentConfig[RewardType] = REWARDS.default(RewardType.RESULT)
     # the observation type the key is computed in; only for retrieval, independent of what an LLM is shown
     key: ObservationType = ObservationType.ACTIONS
+    # the numbers recorded beside the text of every training game (never shown to a component): counts always, V* and Q* too
+    # when solved and the game is solvable
+    reference: ReferenceType = ReferenceType.SOLVED
     checkpoint_path: Path | None = None
     # prints the components when the player is built; not part of the player's identity, so it stays out of the string, the
     # path and equality, and a run with it lands on the same records as one without
@@ -53,6 +56,9 @@ class TACParams(CheckpointedParams):
         key = ObservationType.from_value(options.get("key", ObservationType.ACTIONS.value))
         if key is None:
             raise ValueError(f"Invalid TAC key {options['key']!r}; choose from {ObservationType.values()}")
+        reference = ReferenceType.from_value(options.get("reference", ReferenceType.SOLVED.value))
+        if reference is None:
+            raise ValueError(f"Invalid TAC reference {options['reference']!r}; choose from {ReferenceType.values()}")
         checkpoint = options.get("checkpoint")
         return cls(
             ACTORS.config(options["actor"]),
@@ -62,14 +68,15 @@ class TACParams(CheckpointedParams):
             SELECTORS.config(options["eval_selector"]) if "eval_selector" in options else cls.eval_selector,
             REWARDS.config(options["reward"]) if "reward" in options else cls.reward,
             key,
+            reference,
             Path(checkpoint) if checkpoint else None,
             to_bool(options.get("debug", False)),
         )
 
-    def _options(self) -> list[tuple[str, ComponentConfig | ObservationType]]:
+    def _options(self) -> list[tuple[str, ComponentConfig | ObservationType | ReferenceType]]:
         # the actor and every role that differs from its default, so a new option leaves existing specs and paths unchanged
         defaults = TACParams(self.actor)
-        roles: list[tuple[str, ComponentConfig | ObservationType]] = [
+        roles: list[tuple[str, ComponentConfig | ObservationType | ReferenceType]] = [
             ("actor", self.actor),
             ("critic", self.critic),
             ("feedback", self.feedback),
@@ -77,6 +84,7 @@ class TACParams(CheckpointedParams):
             ("eval_selector", self.eval_selector),
             ("reward", self.reward),
             ("key", self.key),
+            ("reference", self.reference),
         ]
         return [(name, value) for name, value in roles if name == "actor" or value != getattr(defaults, name)]
 

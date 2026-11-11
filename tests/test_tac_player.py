@@ -17,6 +17,7 @@ from plyllm import LLMConfig
 
 from plyagents.tac import build
 from plyagents.tac.critics.oracle import OracleCritic
+from plyagents.tac.model.reference import MoveCounts, Reference
 from plyagents.tac.model.step import TACStep
 from plyagents.tac.params import TACParams
 from plyagents.tac.player import TACPlayer
@@ -99,6 +100,16 @@ def test_a_critic_target_without_a_critic_is_refused_when_the_player_is_built():
         registry.build_player(_game(), registry.player_config("tac:actor=tabular[target=critic]"), "i")
 
 
+@pytest.mark.parametrize(
+    ("critic", "inputs", "refused"),
+    [("none", "delta", "inputs=delta needs"), ("llm[model=metacentrum:gpt-oss-120b[reasoning_effort=low]]", "delta", "inputs=delta needs"), ("none", "q", "inputs=q needs")],
+)
+def test_feedback_inputs_the_critic_cannot_give_are_refused_when_the_player_is_built(critic, inputs, refused):
+    feedback = f"llm[model=metacentrum:gpt-oss-120b[reasoning_effort=low],inputs={inputs}]"
+    with pytest.raises(ValueError, match=refused):
+        registry.build_player(_game(), registry.player_config(f"tac:actor=tabular,critic={critic},feedback={feedback}"), "i")
+
+
 @pytest.mark.parametrize("seed", range(5))
 def test_the_oracle_actor_never_loses_and_the_oracle_critic_gives_the_solved_values(tmp_path, monkeypatch, seed, calls):
     monkeypatch.chdir(tmp_path)  # the solved game is cached under ./cache
@@ -138,11 +149,28 @@ def test_tabular_training_learns_and_a_resumed_run_lands_on_the_same_state(tmp_p
     asyncio.run(harness.run(sync=True))
     state, updates = _outputs(harness)
 
-    # every agent move of the run is one sample of the critic, and the actor's tables hold the same visits
-    samples = sum(len(update["critic"]["samples"]) for update in updates)
-    assert sum(entry["count"] for entry in state["critic"].values()) == samples
+    # every agent move of the run is one sample of the critic's V and one of its Q, and the actor's tables hold the same visits
+    samples = sum(1 for update in updates for sample in update["critic"]["samples"] if sample["action"] is None)
+    assert sum(entry["count"] for entry in state["critic"]["values"].values()) == samples
+    assert sum(entry["count"] for table in state["critic"]["action_values"].values() for entry in table.values()) == samples
     assert sum(entry["count"] for table in state["actor"].values() for entry in table.values()) == samples
-    assert any(entry["value"] != 0.0 for entry in state["critic"].values())
+    assert any(entry["value"] != 0.0 for entry in state["critic"]["values"].values())
+
+    # the reference: each game's record holds the counts before that game, the critic's numbers and the solved values; the
+    # checkpoint holds the counts after the last game
+    replayed = Reference()
+    for update in updates:
+        record = update["reference"]
+        assert [step["step"] for step in record["steps"]] == list(range(1, len(record["steps"]) + 1))
+        for step in record["steps"]:
+            assert {move: MoveCounts.from_dict(counts) for move, counts in step["counts"].items()} == replayed.before(step["key"])
+            assert step["solved"] is not None and len(step["solved"]["action_values"]) == len(step["legal"])
+            assert step["critic"]["value"] is not None and step["grade"] is None
+        for step in record["steps"]:
+            if step["move"] is not None:
+                replayed.add(step["key"], step["move"], record["outcome"])
+    assert Reference.from_dict(state["reference"]).counts == replayed.counts
+    assert sum(counts.visits for moves in replayed.counts.values() for counts in moves.values()) == samples
 
     # the same seeded run again, interrupted in the third game of the first epoch and resumed
     monkeypatch.chdir(tmp_path / "resumed")
@@ -203,3 +231,30 @@ def test_equivalent_configs_play_the_same_games_from_the_same_seeds(tmp_path, mo
     assert moves == asyncio.run(_learn_and_play(second, 60))
     # and the check has teeth: the games are not all alike
     assert len({tuple(game) for game in moves}) > 30
+
+
+def test_the_reference_counts_are_kept_in_the_checkpoint_and_read_back(tmp_path):
+    config = registry.player_config("tac:actor=tabular,critic=tabular")
+    player = registry.build_player(_game(), config, "i")
+    assert isinstance(player, TACPlayer)
+    player.reference.add("z", "<C1R1>", -1.0)
+    player.save_checkpoint(tmp_path)
+    assert json.loads((tmp_path / "state.json").read_text())["reference"] == {"z": {"<C1R1>": {"results": {"loss": 1}, "sum": -1.0, "sum_sq": 1.0}}}
+
+    restored = registry.build_player(_game(), config, "i")
+    assert isinstance(restored, TACPlayer)
+    restored.load_checkpoint(tmp_path)
+    assert restored.reference.counts == player.reference.counts
+
+
+def test_the_solved_values_are_recorded_only_when_asked_for_and_the_game_is_solvable():
+    solved = registry.build_player(_game(), registry.player_config("tac:actor=tabular"), "i")
+    counts = registry.build_player(_game(), registry.player_config("tac:actor=tabular,reference=counts"), "i")
+    assert isinstance(solved, TACPlayer) and isinstance(counts, TACPlayer)
+    assert solved.solved and not counts.solved
+    # the default is left out of the config string and the path, so existing runs keep their names
+    assert TACParams.from_string("actor=tabular").to_string() == "actor=tabular"
+    assert TACParams.from_string("actor=tabular,reference=counts").path_suffix == "actor-tabular_reference-counts"
+    connect_four = registry.build_engine(registry.game_config("connect_four:")).game
+    unsolvable = registry.build_player(connect_four, registry.player_config("tac:actor=tabular"), "i")
+    assert isinstance(unsolvable, TACPlayer) and not unsolvable.solved

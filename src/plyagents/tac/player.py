@@ -8,6 +8,7 @@ from plybench.common.enums import Mode, ObservationType
 from plybench.configs.player_config import PlayerConfig
 from plybench.core.game import TurnBasedGame
 from plybench.core.interface import InterfaceAction, InterfaceObservation
+from plybench.core.minimax import AVQCache, load_or_solve
 from plybench.core.prompt_adapter import PromptAdapter
 from plybench.player.learnable import LearnablePlayer
 from plybench.player.player import PlayerIdentifier, PlayerOutput
@@ -19,6 +20,9 @@ from plyagents.tac.actors.base import Actor
 from plyagents.tac.configs.components import Services
 from plyagents.tac.critics.base import Critic
 from plyagents.tac.feedback.base import Feedback
+from plyagents.tac.model.assessment import Assessment
+from plyagents.tac.model.feedback import StepFeedback
+from plyagents.tac.model.reference import KeyCounts, Reference, ReferenceStep, ReferenceUpdate, solved_values
 from plyagents.tac.model.step import Situation, TACStep
 from plyagents.tac.model.update import TACUpdate
 from plyagents.tac.rewards.base import RewardShaper
@@ -43,6 +47,7 @@ class TACPlayer(LearnablePlayer[TACUpdate]):
         train_selector: Selector,
         eval_selector: Selector,
         key_type: ObservationType,
+        solved: bool,
     ) -> None:
         super().__init__(player_config, identifier)
         self.services = services
@@ -52,6 +57,10 @@ class TACPlayer(LearnablePlayer[TACUpdate]):
         self.shaper = shaper
         self.selectors = {Mode.TRAIN: train_selector, Mode.EVAL: eval_selector}
         self.key_type = key_type
+        # the numbers beside the text (model/reference.py): the counts of every training game, and V* and Q* when solved
+        self.reference = Reference()
+        self.solved = solved
+        self._cache: AVQCache | None = None
         self._key_adapter: PromptAdapter | None = None
         self._rules: str | None = None
 
@@ -60,6 +69,8 @@ class TACPlayer(LearnablePlayer[TACUpdate]):
         self.actor.prepare(game)
         self.critic.prepare(game)
         self.feedback.prepare(game, self.shaper)
+        if self.solved:
+            self._cache = load_or_solve(game)
 
     def _initialize_policy(self, game: TurnBasedGame, prompt_adapter_template: PromptAdapter) -> None:
         self._key_adapter = prompt_adapter_template.for_observation_type(self.key_type)
@@ -68,6 +79,9 @@ class TACPlayer(LearnablePlayer[TACUpdate]):
         self.actor.initialize(game, prompt_adapter_template)
         self.critic.initialize(game, prompt_adapter_template)
         self.feedback.initialize(game, prompt_adapter_template)
+        # again per game: a sampled variant is solved per instance (load_or_solve keeps each in memory)
+        if self.solved:
+            self._cache = load_or_solve(game)
 
     def key(self, observation: InterfaceObservation) -> str:
         # z = phi(o(s)) = o(s): the per-state part of the observation text in the key's formalism, without the rules
@@ -97,16 +111,34 @@ class TACPlayer(LearnablePlayer[TACUpdate]):
         outcome = self.shaper.outcome(game.get_result(self.player_config), steps)
         # every LLM call below is seeded from the game's seed and recorded with the update
         calls = Calls(self.services.llm, game.seed, self.record_call)
-        # the critic assesses and the feedback judges with the state before this game's update
+        # the critic assesses and the feedback judges with the state before this game's update, the counts included
+        history = {step.key: self.reference.before(step.key) for step in steps}
         assessments = await self.critic.assess(steps, calls)
-        feedback = await self.feedback.give(steps, assessments, outcome, calls)
-        return TACUpdate(await self.actor.propose(steps, assessments, outcome, feedback, calls), await self.critic.propose(steps, outcome, feedback, calls))
+        feedback = await self.feedback.give(steps, assessments, outcome, history, calls)
+        return TACUpdate(
+            await self.actor.propose(steps, assessments, outcome, feedback, calls),
+            await self.critic.propose(steps, outcome, feedback, calls),
+            self._record(steps, history, assessments, feedback, outcome),
+        )
+
+    def _record(self, steps: list[TACStep], history: dict[str, KeyCounts], assessments: list[Assessment], feedback: list[StepFeedback], outcome: float) -> ReferenceUpdate:
+        # the numbers beside this game's text, numbered as the feedback's verdicts; V* and Q* only from a solved game
+        solved = [solved_values(self._cache, step) if self._cache is not None else None for step in steps]
+        records = zip(steps, assessments, solved, feedback)
+        return ReferenceUpdate(
+            tuple(
+                ReferenceStep.of(number, step, history[step.key], assessment, values, verdict.grade) for number, (step, assessment, values, verdict) in enumerate(records, start=1)
+            ),
+            outcome,
+        )
 
     def commit(self, update: TACUpdate) -> None:
         if update.actor is not None:
             self.actor.commit(update.actor)
         if update.critic is not None:
             self.critic.commit(update.critic)
+        if update.reference is not None:
+            update.reference.apply_to(self.reference)
 
     def save_update(self, update: TACUpdate, directory: Path) -> None:
         (directory / UPDATE_FILE).write_text(json.dumps(update.to_dict(), indent=1))
@@ -115,12 +147,15 @@ class TACPlayer(LearnablePlayer[TACUpdate]):
         return TACUpdate.from_dict(json.loads((directory / UPDATE_FILE).read_text()), self.actor.parse_update, self.critic.parse_update)
 
     def save_checkpoint(self, checkpoint: Path) -> None:
-        (checkpoint / STATE_FILE).write_text(json.dumps({"actor": self.actor.state(), "critic": self.critic.state()}, indent=1))
+        state = {"actor": self.actor.state(), "critic": self.critic.state(), "reference": self.reference.to_dict()}
+        (checkpoint / STATE_FILE).write_text(json.dumps(state, indent=1))
 
     def load_checkpoint(self, checkpoint: Path) -> None:
         state = json.loads((checkpoint / STATE_FILE).read_text())
         self.actor.load_state(state["actor"])
         self.critic.load_state(state["critic"])
+        # a checkpoint from before the reference holds no counts
+        self.reference = Reference.from_dict(state.get("reference", {}))
 
     def format_llm_output(self, player_output: PlayerOutput) -> str:
         return ""

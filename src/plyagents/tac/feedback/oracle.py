@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import pyspiel as sp
 from plybench.core.game import TurnBasedGame
 from plybench.core.minimax import AVQCache, load_or_solve
@@ -8,6 +10,7 @@ from plybench.core.prompt_adapter import PromptAdapter
 from plyagents.tac.feedback.base import Feedback
 from plyagents.tac.model.assessment import Assessment
 from plyagents.tac.model.feedback import Grade, StepFeedback
+from plyagents.tac.model.reference import KeyCounts
 from plyagents.tac.model.step import TACStep
 from plyagents.tac.rewards.base import RewardShaper
 from plyagents.tac.rewards.result import ResultShaper
@@ -57,7 +60,7 @@ class OracleFeedback(Feedback):
         lesson = f"{step.action} was a {grade} here: with best play it {self._result(action_value)}. Better: {', '.join(best)}."
         return StepFeedback(grade, reason, lesson, note)
 
-    async def give(self, steps: list[TACStep], assessments: list[Assessment], outcome: float, calls: Calls) -> list[StepFeedback]:
+    async def give(self, steps: list[TACStep], assessments: list[Assessment], outcome: float, history: Mapping[str, KeyCounts], calls: Calls) -> list[StepFeedback]:
         return [self._judge(step) for step in steps]
 
     def describe(self) -> str:

@@ -44,8 +44,8 @@ def test_each_key_is_assessed_once_from_the_situation_and_its_notes(stub_calls):
     steps = [TACStep("a", "<C1R1>", 0, "s", rules="the rules of the game"), TACStep("b", "<C2R2>", 0, "t"), TACStep("a", "<C3R3>", 0, "u")]
     assessments = asyncio.run(critic.assess(steps, calls))
 
-    # one call per key, in the order of first visit, each seeded; a revisited key gets the same assessment
-    assert assessments == [Assessment(None, "looks lost"), Assessment(None, "looks even"), Assessment(None, "looks lost")]
+    # one call per key, in the order of first visit, each seeded; a revisited key gets the same assessment, with the entry it read
+    assert assessments == [Assessment(None, "looks lost"), Assessment(None, "looks even", context="we usually draw here"), Assessment(None, "looks lost")]
     assert len(recorded) == 2 and all(call.role == "critic" for call in recorded) and len(set(stub.seeds)) == 2 and None not in stub.seeds
     first, second = recorded
     assert "the rules of the game" in first.system_message and first.prompt_message.startswith("The situation:\na\n\nHow good")
@@ -59,7 +59,7 @@ def test_with_value_the_number_is_kept_and_the_feedback_reads_the_text_only(stub
     [assessment] = asyncio.run(_critic(value=True).assess([TACStep("a", "<C1R1>", 0, "s")], calls))
     assert assessment == Assessment(0.75, "a likely win") and "as a number from -1 to +1" in recorded[0].prompt_message
 
-    prompt = LLMFeedback(MODEL, None).prompt([TACStep("a", "<C1R1>", 0, "s")], [assessment], 1.0)
+    prompt = LLMFeedback(MODEL, None).prompt([TACStep("a", "<C1R1>", 0, "s")], [assessment], 1.0, {})
     assert "Value estimate: a likely win" in prompt and "0.75" not in prompt
 
 
