@@ -6,9 +6,9 @@ from dataclasses import dataclass
 import numpy as np
 
 from plyagents.tac.configs.components import ComponentParams
-from plyagents.tac.selectors.base import Selector
+from plyagents.tac.selectors.base import Choice, Selector
 from plyagents.tac.utils.options import read_options
-from plyagents.tac.utils.selection import argmax
+from plyagents.tac.utils.selection import argmax, best
 
 
 @dataclass(frozen=True, eq=True)
@@ -25,8 +25,10 @@ class EpsGreedy(Selector):
     def __init__(self, eps: float) -> None:
         self.eps = eps
 
-    def select(self, values: Sequence[float], counts: Sequence[int], rng: np.random.Generator) -> int:
-        return int(rng.integers(len(values))) if rng.random() < self.eps else argmax(values, rng)
+    def choose(self, values: Sequence[float], counts: Sequence[int], rng: np.random.Generator) -> Choice:
+        if rng.random() < self.eps:
+            return Choice(int(rng.integers(len(values))), "random", tuple(values), extra={"explored": True})
+        return Choice(argmax(values, rng), "greedy", tuple(values), tuple(best(values)), extra={"explored": False})
 
     def describe(self) -> str:
         return f"a random action with probability {self.eps}, else the best estimate"

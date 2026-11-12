@@ -31,8 +31,9 @@ class OracleActor(Actor[ComponentUpdate]):
         if avq is None:
             raise ValueError(f"No solved value for player {situation.player} in state {situation.os_state!r}")
         values = [avq.Q(action.number) for action in situation.legal]
-        # the oracle knows every value, so every action counts as tried
-        return PlayerOutput(action=situation.legal[selector.select(values, [1] * len(values), rng)])
+        # the oracle knows every value, so every action counts as tried; Q* of each action is in the pick's scores
+        choice = selector.choose(values, [1] * len(values), rng)
+        return PlayerOutput(action=situation.legal[choice.index], data={"select": choice.to_dict()})
 
     def describe(self) -> str:
         return "Q*(s, a) of the solved game through the selector (privileged: reads the true state)"

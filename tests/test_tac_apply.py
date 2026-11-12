@@ -85,3 +85,19 @@ class _AverageScheduler(ConstantScheduler):
 
     def step_size(self, count: int) -> float:
         return 1 / (count + 1)
+
+
+def test_a_write_records_its_steps_its_share_and_the_call_that_shortened_it(stub_calls):
+    calls, _, recorded = stub_calls(["s" * 30])
+    memory = KeyedMemory({"z": Entry("x" * 40, writes=2)})
+    [write] = asyncio.run(CompressApply(MODEL).write(memory, [("z", "first"), ("z", "second")], ConstantScheduler(0.5), 40, calls, "apply", [1, 3]))
+
+    assert (write.steps, write.writes_before, write.budget, write.keep, write.call) == ((1, 3), 2, 40, 20, 0)
+    # the shortening overshot its share; the joined lesson fits its own
+    assert (write.cut_old, write.cut_lesson, write.cut) == (True, False, True)
+    assert recorded[0].about == {"key": "z", "steps": [1, 3]}
+
+
+def test_a_lesson_cut_to_the_budget_is_told_apart_from_a_shortening_that_overshot(calls):
+    [write] = _write(TruncateApply(), KeyedMemory({"z": Entry("abc")}), [("z", "y" * 60)], calls)
+    assert (write.cut_old, write.cut_lesson, write.call) == (False, True, None)

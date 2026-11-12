@@ -41,6 +41,8 @@ class Sample:
     key: str
     target: float
     action: str | None = None
+    # where the target came from: "outcome" (G) or "critic" (the critic's value of the next own state); None in records from before it was kept
+    source: str | None = None
 
 
 @dataclass(frozen=True)
@@ -49,8 +51,8 @@ class TableUpdate(ComponentUpdate):
     samples: tuple[Sample, ...]
 
     def to_dict(self) -> dict[str, Any]:
-        return {"samples": [{"key": sample.key, "action": sample.action, "target": sample.target} for sample in self.samples]}
+        return {"samples": [{"key": sample.key, "action": sample.action, "target": sample.target, "source": sample.source} for sample in self.samples]}
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> TableUpdate:
-        return cls(tuple(Sample(sample["key"], sample["target"], sample["action"]) for sample in data["samples"]))
+        return cls(tuple(Sample(sample["key"], sample["target"], sample["action"], sample.get("source")) for sample in data["samples"]))

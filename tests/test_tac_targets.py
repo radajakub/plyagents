@@ -29,3 +29,8 @@ def test_the_critic_target_needs_values():
 def test_the_collection_builds_both_targets(services):
     assert isinstance(TARGETS.build(TARGETS.config("mc"), services), OutcomeTarget)
     assert isinstance(TARGETS.build(TARGETS.config("critic"), services), CriticTarget)
+
+
+def test_each_target_names_its_source():
+    assert OutcomeTarget().sources(2) == ["outcome", "outcome"]
+    assert CriticTarget().sources(3) == ["critic", "critic", "outcome"] and CriticTarget().sources(0) == []

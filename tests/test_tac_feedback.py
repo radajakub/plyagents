@@ -17,6 +17,7 @@ from plyagents.tac.feedback.log import LogFeedback
 from plyagents.tac.feedback.none import NoFeedback
 from plyagents.tac.feedback.oracle import OracleFeedback
 from plyagents.tac.model.assessment import Assessment
+from plyagents.tac.model.counts import MoveCounts
 from plyagents.tac.model.feedback import StepFeedback
 from plyagents.tac.model.reference import Reference
 from plyagents.tac.model.step import TACStep
@@ -218,3 +219,31 @@ def test_the_history_shows_the_counts_it_is_given():
     ) in prompt
     # without the input the counts are not shown
     assert "earlier games" not in LLMFeedback(MODEL, None).prompt(steps, [Assessment(None, "")] * 2, -1.0, {step.key: reference.before(step.key) for step in steps})
+
+
+def test_the_verdicts_it_drops_and_the_inputs_it_was_shown_are_recorded(stub_calls):
+    answer = {
+        "verdicts": [
+            {"step": 1, "grade": "good", "reason": "first"},
+            {"step": 1, "grade": "mistake", "reason": "again"},
+            {"step": 5, "grade": "good", "reason": "no such step"},
+        ]
+    }
+    calls, _, recorded = stub_calls([json.dumps(answer)])
+    steps = [TACStep("z", "a", 0, "s"), TACStep("y", "b", 0, "t")]
+    history = {"z": {"a": MoveCounts({"win": 1}, 1.0, 1.0)}}
+    feedback = LLMFeedback(MODEL, None, {"delta", "history"})
+
+    given = asyncio.run(feedback.give_recorded(steps, [Assessment(0.2, ""), Assessment(0.5, "")], -1.0, history, calls))
+
+    assert given.verdicts == [StepFeedback("good", "first"), StepFeedback()]
+    assert [(verdict["step"], verdict["reason"]) for verdict in given.dropped] == [(1, "again"), (5, "no such step")]
+    assert given.inputs["shown"] == ["delta", "history"]
+    assert given.inputs["deltas"] == [{"before": 0.2, "after": 0.5, "last": False}, {"before": 0.5, "after": -1.0, "last": True}]
+    assert given.inputs["history"] == [{"a": {"results": {"win": 1}, "sum": 1.0, "sum_sq": 1.0}}, {}]
+    assert recorded[0].about == {"steps": [1, 2]}
+
+
+def test_a_feedback_without_a_call_records_nothing_more(calls):
+    given = asyncio.run(LogFeedback().give_recorded([TACStep("z", "a", 0, "s")], [Assessment(None, "")], 1.0, {}, calls))
+    assert given.verdicts == [StepFeedback(lesson="Played a: win.")] and (given.dropped, given.inputs) == ([], {})

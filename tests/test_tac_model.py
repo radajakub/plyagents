@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 
 from plyagents.tac.model.counts import MoveCounts
 from plyagents.tac.model.feedback import StepFeedback
+from plyagents.tac.model.memory import MemoryWrite
 from plyagents.tac.model.reference import Reference, ReferenceStep, ReferenceUpdate, Values
 from plyagents.tac.model.step import TACStep
 from plyagents.tac.model.table import Sample, Table, TableUpdate
@@ -99,3 +101,16 @@ def test_a_step_reads_the_actors_reasoning_from_the_step_data():
     assert TACStep.from_dict(base).reasoning is None
     step = TACStep("k", "a", 0, "s", reasoning="because")
     assert TACStep.from_dict(step.to_dict()) == step
+
+
+def test_an_update_with_its_judging_record_reads_back_equal():
+    record = {"assessments": [{"value": None, "text": "", "read": [{"memory": "critic", "key": "z"}]}], "feedback": {"verdicts": [], "dropped": [], "inputs": {"shown": []}}}
+    update = TACUpdate(None, TableUpdate((Sample("z", 1.0, "a", "outcome"),)), _record(), record)
+    assert TACUpdate.from_dict(json.loads(json.dumps(update.to_dict())), TableUpdate.from_dict, TableUpdate.from_dict) == update
+
+
+def test_a_memory_write_reads_back_equal_and_an_older_one_gets_empty_defaults():
+    write = MemoryWrite("z", "old", "lesson", 0.5, "ol", "ol\nlesson", True, (1, 3), 2, 40, 20, 4, True, False)
+    assert MemoryWrite.from_dict(json.loads(json.dumps(asdict(write)))) == write
+    older = MemoryWrite.from_dict({"key": "z", "old": "", "lesson": "l", "alpha": 1.0, "compressed": "", "new": "l", "cut": False})
+    assert (older.steps, older.writes_before, older.call, older.cut_old, older.cut_lesson) == ((), None, None, None, None)

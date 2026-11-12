@@ -45,12 +45,14 @@ class TabularActor(Actor[TableUpdate]):
     async def act(self, situation: Situation, selector: Selector, rng: np.random.Generator) -> PlayerOutput:
         table = self.tables.get(situation.key, Table())
         estimates = [table.get(action) for action in situation.actions]
-        index = selector.select([estimate.value for estimate in estimates], [estimate.count for estimate in estimates], rng)
-        return PlayerOutput(action=situation.legal[index])
+        choice = selector.choose([estimate.value for estimate in estimates], [estimate.count for estimate in estimates], rng)
+        # the estimate of each legal action (aligned with them) and the pick, for the step record
+        data = {"estimates": [{"value": estimate.value, "count": estimate.count} for estimate in estimates], "select": choice.to_dict()}
+        return PlayerOutput(action=situation.legal[choice.index], data=data)
 
     async def propose(self, steps: list[TACStep], assessments: list[Assessment], outcome: float, feedback: list[StepFeedback], calls: Calls) -> TableUpdate | None:
-        targets = self.target.targets(assessments, outcome)
-        return TableUpdate(tuple(Sample(step.key, target, step.action) for step, target in zip(steps, targets) if step.action is not None))
+        targets, sources = self.target.targets(assessments, outcome), self.target.sources(len(assessments))
+        return TableUpdate(tuple(Sample(step.key, target, step.action, source) for step, target, source in zip(steps, targets, sources) if step.action is not None))
 
     def commit(self, update: TableUpdate) -> None:
         for sample in update.samples:

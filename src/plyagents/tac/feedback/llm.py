@@ -3,15 +3,16 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
 
 from plybench.utils.text import to_bool
 from pydantic import BaseModel
 
 from plyagents.tac.configs.components import ComponentParams
 from plyagents.tac.configs.model import ModelSpec
-from plyagents.tac.feedback.base import Feedback
+from plyagents.tac.feedback.base import Feedback, Given
 from plyagents.tac.model.assessment import Assessment
-from plyagents.tac.model.counts import KeyCounts
+from plyagents.tac.model.counts import KeyCounts, counts_to_dict
 from plyagents.tac.model.feedback import GRADES, Grade, StepFeedback
 from plyagents.tac.model.step import TACStep
 from plyagents.tac.utils.calls import Calls
@@ -161,12 +162,15 @@ class LLMFeedback(Feedback):
             lines.append(f"The critic's reasoning:\n{assessment.reasoning.strip()}")
         return "\n".join(lines)
 
+    def _deltas(self, steps: list[TACStep], assessments: list[Assessment], outcome: float) -> list[tuple[float, float, bool] | None]:
+        # V(s_t) against V(s_t+1), the next position the agent moves in; after its last move, the outcome (the one reward, no discount)
+        if "delta" not in self.inputs:
+            return [None] * len(steps)
+        values = self._values(assessments)
+        return [(value, values[index + 1] if index + 1 < len(values) else outcome, index + 1 == len(values)) for index, value in enumerate(values)]
+
     def prompt(self, steps: list[TACStep], assessments: list[Assessment], outcome: float, history: Mapping[str, KeyCounts]) -> str:
-        deltas: list[tuple[float, float, bool] | None] = [None] * len(steps)
-        if "delta" in self.inputs:
-            # V(s_t) against V(s_t+1), the next position the agent moves in; after its last move, the outcome (the one reward, no discount)
-            values = self._values(assessments)
-            deltas = [(value, values[index + 1] if index + 1 < len(values) else outcome, index + 1 == len(values)) for index, value in enumerate(values)]
+        deltas = self._deltas(steps, assessments, outcome)
         shown = [self._step(number, step, assessment, delta) for number, (step, assessment, delta) in enumerate(zip(steps, assessments, deltas), start=1)]
         estimated = ("value" in self.inputs and any(assessment.text for assessment in assessments)) or "delta" in self.inputs
         moves = any(assessment.moves for assessment in assessments)
@@ -182,14 +186,35 @@ class LLMFeedback(Feedback):
         )
 
     async def give(self, steps: list[TACStep], assessments: list[Assessment], outcome: float, history: Mapping[str, KeyCounts], calls: Calls) -> list[StepFeedback]:
-        answer = await calls.structured("feedback", self.model.config, self.system(steps), self.prompt(steps, assessments, outcome, history), _Verdicts)
+        return (await self.give_recorded(steps, assessments, outcome, history, calls)).verdicts
+
+    async def give_recorded(self, steps: list[TACStep], assessments: list[Assessment], outcome: float, history: Mapping[str, KeyCounts], calls: Calls) -> Given:
+        prompt = self.prompt(steps, assessments, outcome, history)
+        about = {"steps": list(range(1, len(steps) + 1))}
+        answer = await calls.structured("feedback", self.model.config, self.system(steps), prompt, _Verdicts, about)
         by_step: dict[int, _Verdict] = {}
+        dropped: list[dict[str, Any]] = []
         for verdict in answer.verdicts:
-            by_step.setdefault(verdict.step, verdict)
-        return [
+            # a verdict for a step the game does not have, or for a step already answered, is not used
+            if not 1 <= verdict.step <= len(steps) or verdict.step in by_step:
+                dropped.append(verdict.model_dump())
+                continue
+            by_step[verdict.step] = verdict
+        verdicts = [
             StepFeedback(verdict.grade, verdict.reason, verdict.lesson or None, verdict.critic_note or None) if (verdict := by_step.get(number)) else StepFeedback()
             for number in range(1, len(steps) + 1)
         ]
+        return Given(verdicts, dropped, self._inputs(steps, assessments, outcome, history))
+
+    def _inputs(self, steps: list[TACStep], assessments: list[Assessment], outcome: float, history: Mapping[str, KeyCounts]) -> dict[str, Any]:
+        # what the prompt showed besides the moves and the outcome, by part: the inputs named, the critic's change per step, the earlier games per step
+        inputs: dict[str, Any] = {"shown": [name for name in INPUTS if name in self.inputs]}
+        if "delta" in self.inputs:
+            deltas = self._deltas(steps, assessments, outcome)
+            inputs["deltas"] = [None if delta is None else {"before": delta[0], "after": delta[1], "last": delta[2]} for delta in deltas]
+        if "history" in self.inputs:
+            inputs["history"] = [counts_to_dict(history.get(step.key, {})) for step in steps]
+        return inputs
 
     def describe(self) -> str:
         limit = f", lessons of at most {self.lesson_chars} characters" if self.lesson_chars is not None else ""

@@ -35,6 +35,11 @@ from plyagents.tac.schedulers.constant import ConstantScheduler
 MODEL = ModelSpec.from_string("metacentrum:gpt-oss-120b[reasoning_effort=low]")
 
 
+def _read(key: str, text: str, found: bool = True) -> dict:
+    # the record of a read of the critic's memory, for an entry that was never visited or written
+    return {"memory": "critic", "key": key, "score": None, "found": found, "text": text, "visits": 0, "actions": {}, "writes": 0}
+
+
 def _critic(value: bool = False, assessment_chars: int | None = None) -> LLMVCritic:
     return LLMVCritic(MODEL, None, ConstantScheduler(0.4), TruncateApply(), assessment_chars, value)
 
@@ -46,8 +51,15 @@ def test_each_key_is_assessed_once_from_the_situation_and_its_notes(stub_calls):
     steps = [TACStep("a", "<C1R1>", 0, "s", rules="the rules of the game"), TACStep("b", "<C2R2>", 0, "t"), TACStep("a", "<C3R3>", 0, "u")]
     assessments = asyncio.run(critic.assess(steps, calls))
 
-    # one call per key, in the order of first visit, each seeded; a revisited key gets the same assessment, with the entry it read
-    assert assessments == [Assessment(None, "looks lost"), Assessment(None, "looks even", context="we usually draw here"), Assessment(None, "looks lost")]
+    # one call per key, in the order of first visit, each seeded; a revisited key gets the same assessment, with the entry it read and its record
+    read_a, read_b = (_read("a", "", found=False),), (_read("b", "we usually draw here"),)
+    assert assessments == [
+        Assessment(None, "looks lost", read=read_a),
+        Assessment(None, "looks even", context="we usually draw here", read=read_b),
+        Assessment(None, "looks lost", read=read_a),
+    ]
+    # each call names its key and the steps at it
+    assert [call.about for call in recorded] == [{"key": "a", "steps": [1, 3]}, {"key": "b", "steps": [2]}]
     assert len(recorded) == 2 and all(call.role == "critic" for call in recorded) and len(set(stub.seeds)) == 2 and None not in stub.seeds
     first, second = recorded
     assert "the rules of the game" in first.system_message and first.prompt_message.startswith("The situation:\na\n\nHow good")
@@ -59,7 +71,7 @@ def test_each_key_is_assessed_once_from_the_situation_and_its_notes(stub_calls):
 def test_with_value_the_number_is_kept_and_the_feedback_reads_the_text_only(stub_calls):
     calls, _, recorded = stub_calls([json.dumps({"assessment": "a likely win", "value": 0.75})])
     [assessment] = asyncio.run(_critic(value=True).assess([TACStep("a", "<C1R1>", 0, "s")], calls))
-    assert assessment == Assessment(0.75, "a likely win") and "as a number from -1 to +1" in recorded[0].prompt_message
+    assert assessment == Assessment(0.75, "a likely win", read=(_read("a", "", found=False),)) and "as a number from -1 to +1" in recorded[0].prompt_message
 
     prompt = LLMFeedback(MODEL, None).prompt([TACStep("a", "<C1R1>", 0, "s")], [assessment], 1.0, {})
     assert "Value estimate: a likely win" in prompt and "0.75" not in prompt
@@ -80,7 +92,9 @@ def test_the_q_critic_assesses_every_legal_move_and_aligns_its_answer_with_them(
     critic.memory.entries["a"] = Entry("staying lost twice")
     step = TACStep("a", "<door:1>", 0, "s", legal=("<door:1>", "<door:2>", "<door:3>"), rules="the rules of the game")
     [assessment] = asyncio.run(critic.assess([step], calls))
-    assert assessment == Assessment(None, "<door:1>: stay loses\n<door:2>: switch wins", (-0.5, 0.5, None), "staying lost twice", None, moves=True)
+    read = (_read("a", "staying lost twice"),)
+    expected = Assessment(None, "<door:1>: stay loses\n<door:2>: switch wins", (-0.5, 0.5, None), "staying lost twice", None, moves=True, read=read, unmatched=("<door:9>",))
+    assert assessment == expected
 
     [call] = recorded
     assert "each legal move" in call.system_message and "the rules of the game" in call.system_message

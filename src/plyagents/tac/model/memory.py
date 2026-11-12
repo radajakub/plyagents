@@ -24,6 +24,12 @@ class KeyedMemory:
     def get(self, key: str) -> Entry:
         return self.entries.get(key, Entry())
 
+    def read(self, key: str, memory: str) -> dict[str, Any]:
+        # a read of the entry of a key as a step or an assessment records it: which memory, the key, whether the entry existed, and the entry as it
+        # was (text, visits, actions, writes); score is a retriever's similarity, None for the read by equality
+        entry = self.get(key)
+        return {"memory": memory, "key": key, "score": None, "found": key in self.entries, **asdict(entry), "actions": dict(entry.actions)}
+
     def to_dict(self) -> dict[str, Any]:
         return {key: asdict(entry) for key, entry in self.entries.items()}
 
@@ -43,10 +49,20 @@ class MemoryWrite:
     compressed: str
     new: str
     cut: bool
+    # the steps (1-based) whose lessons were joined into this one, the writes the entry had before (k_s, which gave alpha), the budget B and the
+    # share the old entry was shortened to ((1 - alpha) B), the index of the shortening call among the proposal's calls (None without one), and
+    # which part was cut: the old entry (the shortening overshot its share) or the lesson (over its share). None in records from before they were kept
+    steps: tuple[int, ...] = ()
+    writes_before: int | None = None
+    budget: int | None = None
+    keep: int | None = None
+    call: int | None = None
+    cut_old: bool | None = None
+    cut_lesson: bool | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> MemoryWrite:
-        return cls(**data)
+        return cls(**{**data, "steps": tuple(data.get("steps", ()))})
 
 
 @dataclass(frozen=True)

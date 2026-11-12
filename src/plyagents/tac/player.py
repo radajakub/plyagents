@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from plybench.common.enums import Mode, ObservationType
+from plybench.common.serializable import record_of
 from plybench.configs.player_config import PlayerConfig
 from plybench.core.game import TurnBasedGame
 from plybench.core.interface import InterfaceAction, InterfaceObservation
@@ -21,7 +22,7 @@ from plyagents.tac.configs.components import Services
 from plyagents.tac.critics.base import Critic
 from plyagents.tac.feedback.base import Feedback
 from plyagents.tac.model.assessment import Assessment
-from plyagents.tac.model.counts import KeyCounts
+from plyagents.tac.model.counts import KeyCounts, counts_to_dict
 from plyagents.tac.model.feedback import StepFeedback
 from plyagents.tac.model.reference import Reference, ReferenceStep, ReferenceUpdate, solved_values
 from plyagents.tac.model.step import Situation, TACStep
@@ -105,6 +106,8 @@ class TACPlayer(LearnablePlayer[TACUpdate]):
         context = extra.pop("context", None)
         legal_numbers = tuple(move.number for move in legal_moves)
         rules, self._rules = self._rules, None
+        # the counts of the reference at the key when the move was chosen, as any component could read them, with the step
+        extra["counts"] = counts_to_dict(situation.counts)
         output.data = {**TACStep(situation.key, action, situation.player, situation.os_state, tuple(actions), legal_numbers, context, rules).to_dict(), **extra}
         return output
 
@@ -116,11 +119,14 @@ class TACPlayer(LearnablePlayer[TACUpdate]):
         # the critic assesses and the feedback judges with the state before this game's update, the counts included
         history = {step.key: self.reference.before(step.key) for step in steps}
         assessments = await self.critic.assess(steps, calls)
-        feedback = await self.feedback.give(steps, assessments, outcome, history, calls)
+        given = await self.feedback.give_recorded(steps, assessments, outcome, history, calls)
+        feedback = given.verdicts
+        record = {"assessments": record_of(assessments), "feedback": {"verdicts": [verdict.to_dict() for verdict in feedback], "dropped": given.dropped, "inputs": given.inputs}}
         return TACUpdate(
             await self.actor.propose(steps, assessments, outcome, feedback, calls),
             await self.critic.propose(steps, outcome, feedback, calls),
             self._record(steps, history, assessments, feedback, outcome),
+            record,
         )
 
     def _record(self, steps: list[TACStep], history: dict[str, KeyCounts], assessments: list[Assessment], feedback: list[StepFeedback], outcome: float) -> ReferenceUpdate:
@@ -133,6 +139,11 @@ class TACPlayer(LearnablePlayer[TACUpdate]):
             ),
             outcome,
         )
+
+    def finish(self, game: GameTracker) -> dict[str, Any]:
+        # the state the game was played from (LearnablePlayer.finish) and its shaped outcome G, which an evaluation game has nowhere else
+        steps = [TACStep.from_dict(step.data or {}) for step in game.steps_of(self.player_config)]
+        return {**super().finish(game), "outcome": self.shaper.outcome(game.get_result(self.player_config), steps)}
 
     def commit(self, update: TACUpdate) -> None:
         if update.actor is not None:

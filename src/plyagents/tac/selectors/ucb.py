@@ -7,9 +7,9 @@ from dataclasses import dataclass
 import numpy as np
 
 from plyagents.tac.configs.components import ComponentParams
-from plyagents.tac.selectors.base import Selector
+from plyagents.tac.selectors.base import Choice, Selector
 from plyagents.tac.utils.options import read_options
-from plyagents.tac.utils.selection import argmax
+from plyagents.tac.utils.selection import argmax, best
 
 
 @dataclass(frozen=True, eq=True)
@@ -27,12 +27,13 @@ class UCB(Selector):
     def __init__(self, c: float) -> None:
         self.c = c
 
-    def select(self, values: Sequence[float], counts: Sequence[int], rng: np.random.Generator) -> int:
+    def choose(self, values: Sequence[float], counts: Sequence[int], rng: np.random.Generator) -> Choice:
         untried = [index for index, count in enumerate(counts) if count == 0]
         if untried:
-            return int(rng.choice(untried))
+            return Choice(int(rng.choice(untried)), "untried", untried=tuple(untried))
         total = sum(counts)
-        return argmax([value + self.c * math.sqrt(math.log(total) / count) for value, count in zip(values, counts)], rng)
+        scores = [value + self.c * math.sqrt(math.log(total) / count) for value, count in zip(values, counts)]
+        return Choice(argmax(scores, rng), "ucb", tuple(scores), tuple(best(scores)))
 
     def describe(self) -> str:
         return f"untried actions first, then estimate + {self.c} * sqrt(ln N / n)"

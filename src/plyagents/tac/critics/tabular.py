@@ -44,8 +44,8 @@ class TabularCritic(Critic[TableUpdate]):
         return [Assessment(value, f"value {value:+.2f}", self._action_values(step)) for step, value in zip(steps, values)]
 
     async def propose(self, steps: list[TACStep], outcome: float, feedback: list[StepFeedback], calls: Calls) -> TableUpdate | None:
-        actions = tuple(Sample(step.key, outcome, step.action) for step in steps if step.action is not None)
-        return TableUpdate(tuple(Sample(step.key, outcome) for step in steps) + actions)
+        actions = tuple(Sample(step.key, outcome, step.action, "outcome") for step in steps if step.action is not None)
+        return TableUpdate(tuple(Sample(step.key, outcome, source="outcome") for step in steps) + actions)
 
     def commit(self, update: TableUpdate) -> None:
         for sample in update.samples:

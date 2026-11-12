@@ -147,9 +147,9 @@ class LLMCritic(Critic[MemoryUpdate]):
         rules = next((step.rules for step in steps if step.rules), None)
         return f"{cls.task}\n\nThe rules, as the agent was given them:\n{rules}" if rules else cls.task
 
-    # one call for the key of step, the first step of the game at it
+    # one call for the key of step, the first step of the game at it; about: the key and the steps at it (LLMCall.about)
     @abstractmethod
-    async def _assess(self, system: str, step: TACStep, calls: Calls) -> Assessment:
+    async def _assess(self, system: str, step: TACStep, calls: Calls, about: dict[str, Any]) -> Assessment:
         raise NotImplementedError
 
     def note_key(self, step: TACStep) -> str:
@@ -158,10 +158,11 @@ class LLMCritic(Critic[MemoryUpdate]):
 
     async def assess(self, steps: list[TACStep], calls: Calls) -> list[Assessment]:
         # one call per key, in the order of first visit; the calls start in that order, so each takes its seed by it
-        system, first = self.system(steps), {}
-        for step in steps:
+        system, first, numbers = self.system(steps), {}, {}
+        for number, step in enumerate(steps, start=1):
             first.setdefault(step.key, step)
-        assessed = dict(zip(first, await asyncio.gather(*(self._assess(system, step, calls) for step in first.values()))))
+            numbers.setdefault(step.key, []).append(number)
+        assessed = dict(zip(first, await asyncio.gather(*(self._assess(system, step, calls, {"key": key, "steps": numbers[key]}) for key, step in first.items()))))
         return [assessed[step.key] for step in steps]
 
     async def propose(self, steps: list[TACStep], outcome: float, feedback: list[StepFeedback], calls: Calls) -> MemoryUpdate | None:
@@ -200,14 +201,15 @@ class LLMVCritic(LLMCritic):
         limit = f", at most {self.assessment_chars} characters" if self.assessment_chars is not None else ""
         return f"The situation:\n{key}{notes}\n\n{REQUEST.format(limit=limit)}" + (VALUE if self.value else "")
 
-    async def _assess(self, system: str, step: TACStep, calls: Calls) -> Assessment:
+    async def _assess(self, system: str, step: TACStep, calls: Calls, about: dict[str, Any]) -> Assessment:
         # with the entry it read and its reasoning, for a feedback model shown them
         entry = self.memory.get(step.key).text or None
+        read = (self.memory.read(step.key, "critic"),)
         if not self.value:
-            text, reasoning = await calls.reasoned_text("critic", self.model.config, system, self.prompt(step.key))
-            return Assessment(None, text.strip(), context=entry, reasoning=reasoning or None)
-        answer, reasoning = await calls.reasoned_structured("critic", self.model.config, system, self.prompt(step.key), _Valued)
-        return Assessment(answer.value, answer.assessment.strip(), context=entry, reasoning=reasoning or None)
+            text, reasoning = await calls.reasoned_text("critic", self.model.config, system, self.prompt(step.key), about)
+            return Assessment(None, text.strip(), context=entry, reasoning=reasoning or None, read=read)
+        answer, reasoning = await calls.reasoned_structured("critic", self.model.config, system, self.prompt(step.key), _Valued, about)
+        return Assessment(answer.value, answer.assessment.strip(), context=entry, reasoning=reasoning or None, read=read)
 
     def assessed(self) -> str:
         return "each visited state"
@@ -239,14 +241,25 @@ class LLMQCritic(LLMCritic):
         limit = f", at most {self.assessment_chars} characters each" if self.assessment_chars is not None else ""
         return f"The situation:\n{step.key}\n\nLegal moves:\n{moves}{notes}\n\n{REQUEST_Q.format(limit=limit)}" + (VALUE_Q if self.value else "")
 
-    async def _assess(self, system: str, step: TACStep, calls: Calls) -> Assessment:
-        # the text of every answered move in the order of legal, the numbers aligned with legal (None for a move left out)
+    def _read(self, step: TACStep) -> tuple[dict[str, Any], ...]:
+        # every entry the notes are read from: the situation's, or each legal move's
+        if self.notes is NotesType.SITUATION:
+            return (self.memory.read(step.key, "critic"),)
+        return tuple(self.memory.read(MOVE_KEY.format(key=step.key, move=move), "critic") for move in step.legal)
+
+    async def _assess(self, system: str, step: TACStep, calls: Calls, about: dict[str, Any]) -> Assessment:
+        # the text of every answered move in the order of legal, the numbers aligned with legal (None for a move left out); the moves it named
+        # that are not legal, or named again, are dropped and recorded
         schema = _ValuedMoves if self.value else _Moves
-        answer, reasoning = await calls.reasoned_structured("critic", self.model.config, system, self.prompt(step), schema)
+        answer, reasoning = await calls.reasoned_structured("critic", self.model.config, system, self.prompt(step), schema, about)
         matched = match_moves(step.legal, list(answer.moves))
         text = "\n".join(f"{move}: {item.assessment.strip()}" for move, item in zip(step.legal, matched) if item is not None)
         values = tuple(item.value if isinstance(item, _ValuedMove) else None for item in matched) if self.value else None
-        return Assessment(None, text, values, self.context(step), reasoning or None, moves=True)
+        legal = {_plain(move) for move in step.legal}
+        named = [_plain(item.move) for item in answer.moves]
+        unmatched = tuple(item.move for item in answer.moves if _plain(item.move) not in legal)
+        repeated = tuple(move for move in step.legal if named.count(_plain(move)) > 1)
+        return Assessment(None, text, values, self.context(step), reasoning or None, moves=True, read=self._read(step), unmatched=unmatched, repeated=repeated)
 
     def assessed(self) -> str:
         return f"each legal move of each visited state (notes per {self.notes.value})"

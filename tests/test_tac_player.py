@@ -283,3 +283,20 @@ def test_ucb_with_sample_means_finds_the_best_button_of_a_bandit(tmp_path, monke
     (table,) = state["actor"].values()
     for move, moves in counts.items():
         assert table[move]["count"] == moves.visits and abs(table[move]["value"] - moves.total / moves.visits) < 1e-9
+
+
+def test_a_tabular_move_records_its_estimates_and_its_pick_and_a_sample_its_source(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    harness = _harness()
+    asyncio.run(harness.run(sync=True))
+    _, updates = _outputs(harness)
+
+    folder = harness.path_builder.epoch_dir(harness.experiment, harness.runs[0], 2)
+    game = json.loads(next(folder.rglob("train*/**/game_1.json")).read_text())
+    # the learner's first move (the opponent may start)
+    data = next(step["data"] for step in game["steps"] if "key" in step.get("data", {}))
+    assert len(data["estimates"]) == len(data["legal"]) and data["select"]["rule"] in ("greedy", "random")
+    assert data["select"]["index"] == data["legal"].index(data["action"])
+    # target=critic: the critic's value of the next state, the outcome after the last move
+    sources = [sample["source"] for sample in updates[0]["actor"]["samples"]]
+    assert sources[-1] == "outcome" and set(sources[:-1]) <= {"critic"}

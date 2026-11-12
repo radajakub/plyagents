@@ -148,16 +148,23 @@ class LLMActor(Actor[MemoryUpdate]):
         entry = self.memory.get(key).text if self.reads_memory else ""
         return f"{LABEL}\n{entry}" if entry else None
 
+    def read(self, key: str) -> list[dict[str, Any]] | None:
+        # what the move read from the memory, for the step record: the entry of the key as it was (its text, visits, actions and writes) and whether
+        # it existed; score is a retriever's similarity, None for the read by equality. None when the memory is off
+        return [self.memory.read(key, "actor")] if self.reads_memory else None
+
+    def guidance_parts(self, situation: Situation) -> dict[str, str | None]:
+        # each part the prompt adds after the notes, None where it adds none: the counts (stats also in evaluation), the request, the instruction
+        shown = self.counts is CountsLevel.STATS or (situation.training and self.counts in (CountsLevel.COUNTS, CountsLevel.REQUEST))
+        return {
+            "counts": counts_text(situation.actions, situation.counts, self.counts is CountsLevel.STATS) if shown else None,
+            "request": REQUEST if situation.training and self.counts is CountsLevel.REQUEST else None,
+            "explore": EXPLORE[self.explore] if situation.training and self.explore is not ExploreLevel.OFF else None,
+        }
+
     def guidance(self, situation: Situation) -> str | None:
-        # what the prompt adds after the notes, never part of the memory: the counts (stats also in evaluation), the request, the instruction
-        lines = []
-        if self.counts is CountsLevel.STATS or (situation.training and self.counts in (CountsLevel.COUNTS, CountsLevel.REQUEST)):
-            lines.append(counts_text(situation.actions, situation.counts, self.counts is CountsLevel.STATS))
-        if situation.training and self.counts is CountsLevel.REQUEST:
-            lines.append(REQUEST)
-        if situation.training and self.explore is not ExploreLevel.OFF:
-            lines.append(EXPLORE[self.explore])
-        return "\n".join(lines) or None
+        # what the prompt adds after the notes, never part of the memory, in that order
+        return "\n".join(part for part in self.guidance_parts(situation).values() if part) or None
 
     async def act(self, situation: Situation, selector: Selector, rng: np.random.Generator) -> PlayerOutput:
         assert self._adapter is not None, "initialize must be called before the actor moves"
@@ -176,11 +183,13 @@ class LLMActor(Actor[MemoryUpdate]):
             seed=seed,
             block_log=self._block_log,
         )
-        # the step keeps what was read from the memory as its context, as the feedback is shown it; the guidance beside it, for the analysis
+        # the step keeps what was read from the memory as its context, as the feedback is shown it; the guidance beside it, for the analysis;
+        # and which entry was read in which version, and the guidance by its parts
         if context is not None:
             output.data = {**(output.data or {}), "context": context}
         if guidance is not None:
             output.data = {**(output.data or {}), "guidance": guidance}
+        output.data = {**(output.data or {}), "read": self.read(situation.key), "guidance_parts": self.guidance_parts(situation)}
         return output
 
     async def propose(self, steps: list[TACStep], assessments: list[Assessment], outcome: float, feedback: list[StepFeedback], calls: Calls) -> MemoryUpdate | None:

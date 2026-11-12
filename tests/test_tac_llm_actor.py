@@ -331,3 +331,43 @@ def test_the_log_feedback_makes_the_entry_the_history_in_order(tmp_path, monkeyp
     assert len(lines) == 6 and all(re.fullmatch(r"Played <button:red>: (win|loss)\.", line) for line in lines)
     # the last training game read the five lines before it; no call besides the actor's
     assert stub.prompts[9].count("Played <button:red>") == 5 and len(stub.prompts) == 12
+
+
+def _train_games(harness: TrainingHarness, epoch: int) -> list[dict]:
+    # the training games of an epoch, in round order
+    folder = harness.path_builder.epoch_dir(harness.experiment, harness.runs[0], epoch)
+    paths = sorted(folder.rglob("train*/**/game_*.json"), key=lambda path: int(path.stem.split("_")[1]))
+    return [json.loads(path.read_text()) for path in paths]
+
+
+def test_a_training_run_records_what_each_component_read_wrote_and_was_shown(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    harness = _harness(_ScriptedLLM())
+    asyncio.run(harness.run(sync=True))
+    _, updates, calls = _outputs(harness)
+
+    # each move: the entry it read with its version, the guidance by parts, the counts at the key, and its call
+    games = _train_games(harness, 2)
+    # the learner's first move (the opponent may start)
+    step = next(step for step in games[1]["steps"] if "key" in step.get("data", {}))
+    [read] = step["data"]["read"]
+    assert read["memory"] == "actor" and read["key"] == step["data"]["key"] and read["score"] is None and {"found", "text", "visits", "writes"} <= set(read)
+    assert step["data"]["guidance_parts"] == {"counts": None, "request": None, "explore": None} and "counts" in step["data"]
+    assert step["model_string"] == "stub" and step["model_options"]["reasoning_effort"] is None and step["extracted"]
+
+    # each update: the assessment of every step and the feedback, once; every write names its steps, its share and the call that shortened it
+    for update, game_calls in zip(updates, calls):
+        record = update["record"]
+        assert len(record["assessments"]) == len(record["feedback"]["verdicts"]) == len(update["actor"]["visits"])
+        assert record["feedback"]["dropped"] == [] and record["feedback"]["inputs"] == {"shown": ["value"]}
+        for write in update["actor"]["writes"]:
+            assert write["steps"] and write["budget"] == BUDGET and write["keep"] == int((1 - write["alpha"]) * BUDGET)
+            if write["call"] is not None:
+                call = game_calls[write["call"]]
+                assert call["role"] == "apply" and call["about"]["key"] == write["key"] and call["about"]["steps"] == write["steps"]
+    assert any(write["call"] is not None for update in updates for write in update["actor"]["writes"])
+
+    # each game's ending: the shaped outcome and the state it was played from
+    for game in games:
+        [ending] = game["ending"]["players"].values()
+        assert ending["outcome"] in (-1.0, 0.0, 1.0) and set(ending["state"]) == {"checkpoint", "before"}

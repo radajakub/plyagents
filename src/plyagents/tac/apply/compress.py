@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from plyagents.tac.apply.base import Apply, Shortened
 from plyagents.tac.configs.components import ComponentParams
@@ -30,13 +31,14 @@ class CompressApply(Apply):
     def __init__(self, model: ModelSpec) -> None:
         self.model = model
 
-    async def shorten(self, old: str, keep: int, calls: Calls, role: str) -> Shortened:
+    async def shorten(self, old: str, keep: int, calls: Calls, role: str, about: dict[str, Any] | None = None) -> Shortened:
         if len(old) <= keep:
             return Shortened(old, False)
         if keep == 0:
             return Shortened("", False)
-        text = (await calls.text(role, self.model.config, SYSTEM, PROMPT.format(keep=keep, notes=old))).strip()
-        return Shortened(text[:keep], len(text) > keep)
+        text, call = await calls.indexed_text(role, self.model.config, SYSTEM, PROMPT.format(keep=keep, notes=old), about)
+        text = text.strip()
+        return Shortened(text[:keep], len(text) > keep, call)
 
     def describe(self) -> str:
         return f"compress: {self.model.to_string()} shortens the entry to (1 - alpha) B characters, then the lesson is appended"

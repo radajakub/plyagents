@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -15,3 +16,8 @@ class Assessment:
     reasoning: str | None = None
     # the text assesses each legal move (the LLM Q critic), not the situation: the feedback model labels it so, and its critic notes are about the move
     moves: bool = False
+    # an LLM critic's: every entry of its memory it read (KeyedMemory.read), and, for the Q critic, the moves the model named that are not legal and
+    # the legal moves it named more than once (only the first answer counts)
+    read: tuple[dict[str, Any], ...] = ()
+    unmatched: tuple[str, ...] = ()
+    repeated: tuple[str, ...] = ()
