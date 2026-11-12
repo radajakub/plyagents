@@ -19,6 +19,7 @@ from plybench.player.llm_player import LLMPlayer
 from plybench.player.output_strategies import TextStrategy
 from plybench.trace.load import load_game
 from plybench.trace.model import Source
+from plybench.trace.text import render
 from plyllm import LLM, LLMConfig, LLMResponse, LLMTokens
 from plyllm.response import OutputText
 
@@ -411,4 +412,27 @@ def test_a_saved_game_reads_back_as_components_events_and_memories(tmp_path, mon
     # a test game: moves only, the memory frozen at the epoch's checkpoint
     test = load_game(next(folder.rglob("test*/**/game_1.json")), harness.op.registry)
     [frozen] = [player for player in test.players.values() if player.key == "tac"]
-    assert {event.phase for event in frozen.events} == {"move"} and frozen.memories[0].before.endswith("epoch_2/checkpoint")
+    before = frozen.memories[0].before
+    assert {event.phase for event in frozen.events} == {"move"} and before is not None and before.endswith("epoch_2/checkpoint")
+
+
+def test_a_trained_game_prints_its_moves_learning_and_memory(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    harness = _harness(_ScriptedLLM())
+    asyncio.run(harness.run(sync=True))
+    folder = harness.path_builder.epoch_dir(harness.experiment, harness.runs[0], 2)
+
+    text = render(load_game(next(folder.rglob("train*/**/game_2.json")), harness.op.registry), ["tac"])
+
+    for shown in (
+        "  Components",
+        "    actor.apply: compress metacentrum:gpt-oss-120b",
+        "  [1] actor.memory",
+        "← memory actor: ",
+        " Learning",
+        "] feedback",
+        "call #",
+        "  Memory actor, as the game started",
+    ):
+        assert shown in text
+    assert "read at steps [" in text and "not read or written in this game:" in text

@@ -70,6 +70,9 @@ def _move_events(context: TraceContext, events: list[Event]) -> dict[int, int]:
             reads = tuple(Value("entry", read, Source("memory", read["memory"], read["key"])) for read in data["read"])
             context_inputs.append(Value("context", data.get("context"), Source("event", index=len(events))))
             events.append(Event("move", "actor.memory", (Value("key", key, from_key),), reads, number))
+        elif data.get("context") is not None:
+            # a record from before the reads were kept: the text the actor read, without the entry it came from
+            context_inputs.append(Value("context", data["context"]))
         if data.get("guidance_parts") is not None:
             parts = tuple(Value(name, text) for name, text in data["guidance_parts"].items())
             context_inputs.append(Value("guidance", data.get("guidance"), Source("event", index=len(events))))
@@ -91,6 +94,9 @@ def _learn_events(update: dict[str, Any], calls: list[dict[str, Any]], keys: dic
     record = update.get("record") or {}
     critic_events = {}
     for number, assessment in enumerate(record.get("assessments", []), start=1):
+        # a critic that gives nothing (critic=none) leaves empty assessments: no event
+        if not any(assessment.get(name) for name in ("value", "text", "action_values", "read")):
+            continue
         inputs = (
             Value("key", None, Source("event", index=keys.get(number))),
             *(Value("entry", read, Source("memory", read["memory"], read["key"])) for read in assessment.get("read", [])),
