@@ -13,6 +13,7 @@ from plybench.common.enums import GameResults, Mode
 from plybench.configs.player_config import PlayerConfig
 from plybench.core.minimax import AVQCache, load_or_solve
 from plybench.harness.training.training import TrainingHarness
+from plybench.trace.load import load_game
 from plyllm import LLMConfig
 
 from plyagents.tac import build
@@ -300,3 +301,19 @@ def test_a_tabular_move_records_its_estimates_and_its_pick_and_a_sample_its_sour
     # target=critic: the critic's value of the next state, the outcome after the last move
     sources = [sample["source"] for sample in updates[0]["actor"]["samples"]]
     assert sources[-1] == "outcome" and set(sources[:-1]) <= {"critic"}
+
+
+def test_a_tabular_game_reads_back_as_estimates_picks_and_samples(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    harness = _harness()
+    asyncio.run(harness.run(sync=True))
+    folder = harness.path_builder.epoch_dir(harness.experiment, harness.runs[0], 1)
+
+    trace = load_game(next(folder.rglob("train*/**/game_1.json")), harness.op.registry)
+    [tac] = [player for player in trace.players.values() if player.key == "tac"]
+
+    assert [event.component for event in tac.events if event.step == 1 and event.phase == "move"] == ["key", "actor", "train_selector"]
+    samples = [event for event in tac.events if event.phase == "learn" and event.component == "actor"]
+    assert samples and {value.source.kind for event in samples for value in event.inputs if value.source is not None} <= {"critic", "outcome"}
+    # tables are not a textual memory: no memory view
+    assert tac.memories == ()

@@ -17,6 +17,8 @@ from plybench.harness.training.training import TrainingHarness
 from plybench.player.learnable import LEARNER_CALLS
 from plybench.player.llm_player import LLMPlayer
 from plybench.player.output_strategies import TextStrategy
+from plybench.trace.load import load_game
+from plybench.trace.model import Source
 from plyllm import LLM, LLMConfig, LLMResponse, LLMTokens
 from plyllm.response import OutputText
 
@@ -371,3 +373,42 @@ def test_a_training_run_records_what_each_component_read_wrote_and_was_shown(tmp
     for game in games:
         [ending] = game["ending"]["players"].values()
         assert ending["outcome"] in (-1.0, 0.0, 1.0) and set(ending["state"]) == {"checkpoint", "before"}
+
+
+def test_a_saved_game_reads_back_as_components_events_and_memories(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    harness = _harness(_ScriptedLLM())
+    asyncio.run(harness.run(sync=True))
+    folder = harness.path_builder.epoch_dir(harness.experiment, harness.runs[0], 2)
+
+    trace = load_game(next(folder.rglob("train*/**/game_2.json")), harness.op.registry)
+    [tac] = [player for player in trace.players.values() if player.key == "tac"]
+
+    # the components with their models, nested ones by their parent
+    models = {component.id: component.model for component in tac.components}
+    assert models["actor"] == models["actor.apply"] == models["feedback"] == "metacentrum:gpt-oss-120b" and models["critic"] is None
+    # each move: the key, the entry read, the guidance, then the actor's call with them as inputs
+    first_move = [event.component for event in tac.events if event.phase == "move" and event.step == 1]
+    assert first_move == ["key", "actor.memory", "actor.guidance", "actor"]
+    actor = next(event for event in tac.events if event.component == "actor" and event.step == 1)
+    sources = {value.name: value.source for value in actor.inputs}
+    assert sources["key"] == Source("event", index=0) and sources["context"] is not None and sources["context"].kind == "event"
+    assert actor.call is not None and actor.call["model_string"] == "stub"
+    # the learning: the feedback's call, every write with the compress call that shortened it, the reference and the state
+    learn = [event for event in tac.events if event.phase == "learn"]
+    [feedback] = [event for event in learn if event.component == "feedback"]
+    assert feedback.call is not None and feedback.call["role"] == "feedback"
+    writes = [event for event in learn if event.component == "actor.apply"]
+    assert writes and all(event.inputs[1].source == Source("event", index=tac.events.index(feedback)) for event in writes)
+    assert all(event.call["role"] == "apply" for event in writes if event.call is not None)
+    assert [event.component for event in learn][-2:] == ["reference", "commit"]
+    # the memory as the game started from it: the entries it read are marked with their steps
+    [memory] = tac.memories
+    read = {entry.key: entry.read_at for entry in memory.entries if entry.read_at}
+    assert memory.memory == "actor" and memory.before is not None and read
+    assert json.loads(json.dumps(trace.to_dict()))["players"]
+
+    # a test game: moves only, the memory frozen at the epoch's checkpoint
+    test = load_game(next(folder.rglob("test*/**/game_1.json")), harness.op.registry)
+    [frozen] = [player for player in test.players.values() if player.key == "tac"]
+    assert {event.phase for event in frozen.events} == {"move"} and frozen.memories[0].before.endswith("epoch_2/checkpoint")

@@ -8,6 +8,7 @@ from plyagents.tac.build import build_tac_player
 from plyagents.tac.configs.components import Services
 from plyagents.tac.params import TACParams
 from plyagents.tac.player import TACTracker
+from plyagents.tac.trace import read_tac
 
 
 def register_players(registry: Registry, llm: LLM) -> None:
@@ -15,5 +16,5 @@ def register_players(registry: Registry, llm: LLM) -> None:
     # components call through this LLM router
     services = Services(llm, registry.solvable)
     registry.register_player(
-        PlayerSpec("tac", TACParams, lambda game, player_config, identifier: build_tac_player(game, player_config, identifier, services), tracker=TACTracker())
+        PlayerSpec("tac", TACParams, lambda game, player_config, identifier: build_tac_player(game, player_config, identifier, services), tracker=TACTracker(), trace=read_tac)
     )
