@@ -11,9 +11,9 @@ game seeded with that seed. The config (JSON):
 
 Each sample is saved as its own file, <out>/<state>_<memory>_<level>/sample_<i>.json (the action, the context and the guidance shown, the prompt,
 the reasoning and the output), and a saved sample is not asked again, so a stopped run continues. A plyservice scripts job: --check --json prints
-the plan and its problems (a memory without an entry for the state's key, counts shown from a checkpoint without counts), each sample prints
-`progress: <done>/<total>`, --status prints the tables of the saved samples as JSON: per cell the share of each action with a 95% Wilson interval
-and the entropy, and against the cell of the same state and memory at the baseline level the total variation distance (95% bootstrap interval) and
+the plan and its problems (a memory without an entry for the state's key, counts shown from a checkpoint without counts); --job-report <path> keeps a
+report (plybench.report) of the cells with samples left when it starts while it works, and the tables printed at the end are the same: per cell
+the share of each action with a 95% Wilson interval and the entropy, and against the cell of the same state and memory at the baseline level the total variation distance (95% bootstrap interval) and
 a permutation p-value. The bootstrap interval of a distance is biased away from 0, so whether a level changes the distribution is read from the
 permutation test, and the distance is its size.
 
@@ -21,7 +21,7 @@ Examples:
     uv run python scripts/sample_actor.py --config experiments/exploration/part_a.json --out analysis/tac_exploration/part_a --check
     uv run python scripts/sample_actor.py --config experiments/exploration/part_a.json --out analysis/tac_exploration/part_a --dry-run
     uv run python scripts/sample_actor.py --config experiments/exploration/part_a.json --out analysis/tac_exploration/part_a
-    uv run python scripts/sample_actor.py --config experiments/exploration/part_a.json --out analysis/tac_exploration/part_a --status
+    uv run python scripts/sample_actor.py --config experiments/exploration/part_a.json --out analysis/tac_exploration/part_a --job-report <path>
 """
 
 from __future__ import annotations
@@ -42,6 +42,7 @@ from plybench.cli.shared import build_op
 from plybench.common.enums import Mode
 from plybench.core.engine import TurnBasedEngine
 from plybench.core.interface import InterfaceAction, InterfaceObservation
+from plybench.report import Item, Report, ReportFile, estimate
 from plybench.trackers.step_data import StepData
 from plybench.utils.seed import derive_seed
 from plyllm import LLM, LLMResponse, LLMTokens
@@ -55,6 +56,8 @@ from plyagents.tac.register import register_players
 FAIL = "fail"
 # resamples of the bootstrap interval and of the permutation test; their generator is seeded, so the tables are the same on every run
 RESAMPLES = 2000
+# seconds between two writes of the report while sampling (each costs the bootstrap of every cell)
+REPORT_INTERVAL = 30.0
 
 
 @dataclass(frozen=True)
@@ -207,6 +210,32 @@ def status(cells: list[Cell], out: Path, baseline: str) -> dict[str, Any]:
     return {"cells": tables}
 
 
+def report(cells: list[Cell], out: Path, baseline: str, planned: int) -> Report:
+    # the report of the cells this command samples: one item per cell, a table of the saved samples per cell (the status of every cell, as a cell's
+    # baseline may be outside them)
+    rows = {row["cell"]: row for row in status(cells, out, baseline)["cells"]}
+    result = Report(unit="samples", items=[Item(cell.name, {"cell": cell.name}, planned, rows[cell.name]["samples"]) for cell in cells])
+    table = []
+    for cell in cells:
+        row = rows[cell.name]
+        shares = ", ".join(f"{action} {value['share']:.2f} [{value['low']:.2f}, {value['high']:.2f}]" for action, value in row["shares"].items())
+        line: dict[str, Any] = {"item": cell.name, "state": cell.state, "memory": cell.memory, "level": cell.level, "samples": row["samples"]}
+        line |= {"entropy": row["entropy_bits"], "shares": shares, "against": row.get("against")}
+        line |= {"tv": estimate(row["tv"], row["tv_low"], row["tv_high"]) if "tv" in row else None, "p": row.get("p_permutation")}
+        table.append(line)
+    columns = [{"key": "item", "label": "cell", "name": True}] + [{"key": key, "label": key} for key in ("state", "memory", "level")]
+    columns += [{"key": "samples", "label": "samples", "digits": 0}, {"key": "entropy", "label": "entropy (bits)", "digits": 2}, {"key": "shares", "label": "actions"}]
+    columns += [{"key": "against", "label": "baseline"}, {"key": "tv", "label": "TV distance", "rate": True}, {"key": "p", "label": "permutation p", "digits": 4}]
+    result.add_table(
+        "actions per cell",
+        columns,
+        table,
+        note="shares with 95% Wilson intervals; TV distance from the cell of the same state and memory at the baseline level, with a 95% bootstrap interval "
+        "(biased away from 0: read whether a level changes the distribution from the permutation p)",
+    )
+    return result
+
+
 def print_tables(tables: dict[str, Any]) -> None:
     for row in tables["cells"]:
         shares = ", ".join(f"{action} {value['share']:.2f} [{value['low']:.2f}, {value['high']:.2f}]" for action, value in row["shares"].items())
@@ -222,15 +251,12 @@ async def main() -> None:
     parser.add_argument("--concurrency", type=int, default=10, help="requests in flight per provider (default 10)")
     parser.add_argument("--check", action="store_true", help="print the plan (samples planned and left, the models, the output) and its problems, then exit; no calls")
     parser.add_argument("--json", action="store_true", help="with --check: print the plan as JSON")
-    parser.add_argument("--status", action="store_true", help="print the tables of the saved samples as JSON, then exit; no calls")
+    parser.add_argument("--job-report", type=Path, help="keep a report (plybench.report) of the cells with samples left while it works, in this JSON file")
     parser.add_argument("--dry-run", action="store_true", help="print the prompt of each cell's first sample, no calls")
     args = parser.parse_args()
 
     config = json.loads(args.config.read_text())
     cells = [cell for cell in read_cells(config) if args.cells is None or cell.name in args.cells]
-    if args.status:
-        print(json.dumps(status(cells, args.out, config["baseline"])))
-        return
 
     op = build_op(concurrency=args.concurrency)
     samples = range(int(config["samples"]))
@@ -258,6 +284,11 @@ async def main() -> None:
 
     print(f"{len(cells)} cells, {len(left)} of {len(planned)} samples to ask", flush=True)
     done, failed = len(planned) - len(left), 0
+    # the report's items: the cells with samples left now; its tables cost a bootstrap per cell, so it is written at most every REPORT_INTERVAL seconds
+    open_cells = [cell for cell in cells if any(other is cell for other, _ in left)]
+    report_file = ReportFile(args.job_report, lambda: report(open_cells, args.out, config["baseline"], len(samples)), REPORT_INTERVAL) if args.job_report is not None else None
+    if report_file is not None:
+        report_file.write()
 
     async def one(cell: Cell, sample: int) -> None:
         nonlocal done, failed
@@ -273,8 +304,16 @@ async def main() -> None:
         path.write_text(json.dumps(saved, indent=1))
         done += 1
         print(f"progress: {done}/{len(planned)}", flush=True)
+        if report_file is not None:
+            report_file.changed()
 
-    await asyncio.gather(*(one(cell, sample) for cell, sample in left))
+    completed = False
+    try:
+        await asyncio.gather(*(one(cell, sample) for cell, sample in left))
+        completed = True
+    finally:
+        if report_file is not None:
+            report_file.close(finished=completed and failed == 0)
     print_tables(status(cells, args.out, config["baseline"]))
     if failed:
         raise SystemExit(f"{failed} samples failed; run the same command again to ask them")

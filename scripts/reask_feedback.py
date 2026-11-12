@@ -26,8 +26,8 @@ with no critic and named <inputs>_nocritic (the text-only runs: no number from a
 Each answer is saved as its own file, <out>/<name>/epoch_<e>_game_<r>.json (the grades, the keys and the solver's verdicts, the call), and an
 answer already saved is not asked again, so a stopped run continues. The name is the variant, the level's inputs and critic (e.g.
 memory+delta_tabular), or obfuscated, with _seed<n> for another seed. A plyservice scripts job (see its README): --check --json prints the plan and
-checks that the calls are rebuilt exactly (the run's own inputs give its recorded prompts), each answer prints `progress: <done>/<total>`, --status
-prints the tables of the saved answers.
+checks that the calls are rebuilt exactly (the run's own inputs give its recorded prompts); --job-report <path> keeps a report (plybench.report) of the
+names this command asks (those with answers left when it starts) while it works: their progress and the tables of their saved answers.
 
 Examples:
     uv run python scripts/reask_feedback.py --experiment tac_monty_hall_ladder --trainees "<R3 config>" --out analysis/tac_monty_hall_ladder/reask_r3
@@ -35,7 +35,7 @@ Examples:
     uv run python scripts/reask_feedback.py --experiment tac_monty_hall_ladder --trainees "<R3 config>" --out <dir> --variants as_run --sample-seeds 1 2
     uv run python scripts/reask_feedback.py --experiment tac_monty_hall_ladder --trainees "<R3 config>" --out <dir> --levels L2 --dry-run
     uv run python scripts/reask_feedback.py --experiment tac_monty_hall_ladder --trainees "<R3 config>" --out <dir> --variants --inputs history memory+history
-    uv run python scripts/reask_feedback.py --out analysis/tac_monty_hall_ladder/reask_r3 --status
+    uv run python scripts/reask_feedback.py --experiment tac_monty_hall_ladder --trainees "<R3 config>" --out <dir> --job-report <dir>/report.json
 """
 
 from __future__ import annotations
@@ -54,6 +54,7 @@ from plybench.configs.training_run import TrainingRun
 from plybench.core.game import TurnBasedGame
 from plybench.harness.training.training import TrainingHarness
 from plybench.player.learnable import LEARNER_CALLS
+from plybench.report import Item, Report, ReportFile
 from plybench.trackers.llm_call import LLMCall
 from plybench.utils.seed import derive_seed
 from plyllm import ModelConfig
@@ -297,7 +298,7 @@ def answer_path(out: Path, name: str, game: Game) -> Path:
 
 
 async def answer(calls: Calls, model: ModelConfig, ask: Ask, deltas: list[float], path: Path, records: list[LLMCall]) -> list[str]:
-    # one answer, saved as soon as it arrives (a stopped run keeps it), with the keys, the solver's verdicts and V*'s TD errors the status needs;
+    # one answer, saved as soon as it arrives (a stopped run keeps it), with the keys, the solver's verdicts and V*'s TD errors the report needs;
     # the new grade of every step, "none" for a step the answer leaves out
     reply = await calls.structured("feedback", model, ask.system, ask.prompt, _Verdicts)
     by_step: dict[int, str] = {}
@@ -323,12 +324,14 @@ def agree_delta(delta: float, grade: str) -> bool:
     return grade in (("good", "strong") if delta > 0 else ("mistake", "dubious"))
 
 
-def status(out: Path) -> dict[str, object]:
-    # the saved answers as plyservice's tables: per name the agreement with the solver (and with V*'s TD error), then per name, situation and kind
-    # of move the grades
+def report(out: Path, planned: dict[str, int]) -> Report:
+    # the report of the names this command asks (planned: answers per name): one item per name, the agreement with the solver (and with V*'s TD error)
+    # per name, then per name, situation and kind of move the grades; answers of other names in the folder are left out
     graded: dict[str, list[tuple[str, bool, str, bool, float | None]]] = defaultdict(list)
     answers: dict[str, int] = defaultdict(int)
     for path in sorted(out.glob("*/epoch_*_game_*.json")):
+        if path.parent.name not in planned:
+            continue
         saved = json.loads(path.read_text())
         answers[saved["variant"]] += 1
         deltas = saved.get("delta") or [None] * len(saved["keys"])
@@ -345,7 +348,7 @@ def status(out: Path) -> dict[str, object]:
     names = sorted(answers, key=lambda name: (name not in VARIANTS, VARIANTS.index(name) if name in VARIANTS else 0, name))
     summary = [
         {
-            "variant": name,
+            "item": name,
             "answers": answers[name],
             "optimal": share([step for step in graded[name] if step[1]]),
             "other": share([step for step in graded[name] if not step[1]]),
@@ -360,33 +363,29 @@ def status(out: Path) -> dict[str, object]:
         for key, optimal, grade, _, _ in graded[name]:
             rows[name, key, optimal][grade] += 1
     detail = [
-        {"variant": name, "situation": key, "move": "optimal" if optimal else "not optimal", "n": sum(counts.values())}
+        {"item": name, "situation": key, "move": "optimal" if optimal else "not optimal", "n": sum(counts.values())}
         | {grade: counts.get(grade, 0) for grade in (*GRADES, "none")}
         | {"agree": sum(count for grade, count in counts.items() if agree(optimal, grade)) / sum(counts.values())}
         for (name, key, optimal), counts in rows.items()
     ]
     rate = {"rate": True}
     columns = (("optimal", "optimal moves"), ("other", "other moves"), ("all", "all moves"), ("later", "all but each game's first"), ("delta", "with V*'s TD error"))
-    return {
-        "kind": "tables",
-        "tables": [
-            {
-                "title": "agreement with the solver, per variant and level",
-                "note": "share of graded moves where the feedback agrees: good or strong on an optimal move, mistake or dubious on another; the last"
-                " column against the sign of V*'s TD error in the same game (neutral where it is 0), what the classical estimator would use",
-                "columns": [{"key": "variant", "label": "variant"}, {"key": "answers", "label": "answers", "digits": 0}]
-                + [{"key": key, "label": label} | rate for key, label in columns],
-                "rows": summary,
-            },
-            {
-                "title": "grades per situation",
-                "columns": [{"key": "variant", "label": "variant"}, {"key": "situation", "label": "situation"}, {"key": "move", "label": "move"}]
-                + [{"key": key, "label": key, "digits": 0} for key in ("n", *GRADES, "none")]
-                + [{"key": "agree", "label": "agree"} | rate],
-                "rows": detail,
-            },
-        ],
-    }
+    result = Report(unit="answers", items=[Item(name, {"variant": name}, total, answers.get(name, 0)) for name, total in planned.items()])
+    result.add_table(
+        "agreement with the solver, per variant and level",
+        [{"key": "item", "label": "variant", "name": True}, {"key": "answers", "label": "answers", "digits": 0}] + [{"key": key, "label": label} | rate for key, label in columns],
+        summary,
+        note="share of graded moves where the feedback agrees: good or strong on an optimal move, mistake or dubious on another; the last column against the"
+        " sign of V*'s TD error in the same game (neutral where it is 0), what the classical estimator would use",
+    )
+    result.add_table(
+        "grades per situation",
+        [{"key": "item", "label": "variant", "name": True}, {"key": "situation", "label": "situation"}, {"key": "move", "label": "move"}]
+        + [{"key": key, "label": key, "digits": 0} for key in ("n", *GRADES, "none")]
+        + [{"key": "agree", "label": "agree"} | rate],
+        detail,
+    )
+    return result
 
 
 async def main() -> None:
@@ -414,14 +413,11 @@ async def main() -> None:
         "--check", action="store_true", help="print what would be asked (answers planned and left, the model, the outputs) and check the rebuild, then exit; no calls"
     )
     parser.add_argument("--json", action="store_true", help="with --check: print the plan as JSON")
-    parser.add_argument("--status", action="store_true", help="print the tables of the saved answers as JSON, then exit; no calls")
+    parser.add_argument("--job-report", type=Path, help="keep a report (plybench.report) of the names this command asks while it works, in this JSON file")
     parser.add_argument("--dry-run", action="store_true", help="print the call of the last selected game per name, no calls")
     parser.add_argument("--max-chars", type=int, default=70, help="cut each key to this length (default 70)")
     args = parser.parse_args()
 
-    if args.status:
-        print(json.dumps(status(args.out)))
-        return
     if not (args.variants or args.levels or args.inputs or args.obfuscated):
         raise SystemExit("nothing to ask: name --variants, --levels, --inputs or --obfuscated")
     op = build_op(concurrency=args.concurrency)
@@ -465,6 +461,12 @@ async def main() -> None:
 
     deltas = await oracle_deltas(every, engine.game, services)
     done, failed = len(asks) - len(left), 0
+    # the report's items: the names with answers left now, each with all its answers (a name saved in full is not shown)
+    open_names = {ask.name for ask in left}
+    planned = {name: sum(1 for ask in asks if ask.name == name) for name in names if name in open_names}
+    report_file = ReportFile(args.job_report, lambda: report(args.out, planned)) if args.job_report is not None else None
+    if report_file is not None:
+        report_file.write()
 
     async def one(ask: Ask) -> None:
         nonlocal done, failed
@@ -478,8 +480,16 @@ async def main() -> None:
             return
         done += 1
         print(f"progress: {done}/{len(asks)}", flush=True)
+        if report_file is not None:
+            report_file.changed()
 
-    await asyncio.gather(*(one(ask) for ask in left))
+    completed = False
+    try:
+        await asyncio.gather(*(one(ask) for ask in left))
+        completed = True
+    finally:
+        if report_file is not None:
+            report_file.close(finished=completed and failed == 0)
     for name in names:
         print(f"\n== {name}: grades against the solver (agree: good or strong on an optimal move, mistake or dubious on another)")
         counts: dict[str, dict[bool, Counter[str]]] = defaultdict(lambda: defaultdict(Counter))
