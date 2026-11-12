@@ -1,7 +1,7 @@
-"""Part A of the exploration experiment: sample the TAC actor many times in one fixed state, with a fixed memory and an exploration level, and compare
+"""Part A of the exploration experiment: sample the TextRL actor many times in one fixed state, with a fixed memory and an exploration level, and compare
 the distributions of its actions.
 
-A cell is a state (a game and the OpenSpiel actions from its start, chance included), a memory (a checkpoint of the TAC player, or none) and a level
+A cell is a state (a game and the OpenSpiel actions from its start, chance included), a memory (a checkpoint of the TextRL player, or none) and a level
 (the actor's options, e.g. `,explore=memory` or `,counts=request`, put into the config's actor spec). Every cell is sampled with the seeds 0..N-1,
 the same seeds in every cell, in training mode (the mode the instruction and the counts are shown in); a sample is one move of the player, as in a
 game seeded with that seed. The config (JSON):
@@ -48,9 +48,9 @@ from plybench.utils.seed import derive_seed
 from plyllm import LLM, LLMResponse, LLMTokens
 from plyllm.response import OutputText
 
-from plyagents.tac.actors.llm import LLMActor
-from plyagents.tac.player import TACPlayer
-from plyagents.tac.register import register_players
+from plyagents.textrl.actors.llm import LLMActor
+from plyagents.textrl.player import TextRLPlayer
+from plyagents.textrl.register import register_players
 
 # the name of a failed move in the tables
 FAIL = "fail"
@@ -83,7 +83,7 @@ def read_cells(config: dict[str, Any]) -> list[Cell]:
             checkpoint = Path(setup["checkpoint"]) if setup.get("checkpoint") else None
             for level in setup["levels"]:
                 actor = config["actor"].replace("{options}", config["levels"][level])
-                player = f"tac:actor={actor}" + (f",checkpoint={checkpoint}" if checkpoint is not None else "")
+                player = f"textrl:actor={actor}" + (f",checkpoint={checkpoint}" if checkpoint is not None else "")
                 cells.append(Cell(state, memory, level, spec["game"], tuple(spec["actions"]), player, checkpoint))
     return cells
 
@@ -92,15 +92,15 @@ def sample_path(out: Path, cell: Cell, sample: int) -> Path:
     return out / cell.name / f"sample_{sample}.json"
 
 
-def situation(op: PlyBench, cell: Cell, sample: int) -> tuple[TurnBasedEngine, TACPlayer, InterfaceObservation, list[InterfaceAction]]:
+def situation(op: PlyBench, cell: Cell, sample: int) -> tuple[TurnBasedEngine, TextRLPlayer, InterfaceObservation, list[InterfaceAction]]:
     # the cell's state and a fresh player, as a game seeded with `sample` would have them at this move: seeded, in training mode, its memory restored
     engine = op.registry.build_engine(op.registry.game_config(cell.game))
     engine.reset()
     for action in cell.actions:
         engine.game.state.apply_action(action)
     player = op.registry.build_player(engine.game, op.registry.player_config(cell.spec), "i")
-    if not isinstance(player, TACPlayer):
-        raise SystemExit(f"{cell.name}: {cell.spec} is not a TAC player")
+    if not isinstance(player, TextRLPlayer):
+        raise SystemExit(f"{cell.name}: {cell.spec} is not a TextRL player")
     player.seed(derive_seed(sample, player.identifier))
     player.set_mode(Mode.TRAIN)
     player.initialize_policy(engine.game, engine.prompt_adapter)

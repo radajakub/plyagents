@@ -1,0 +1,12 @@
+{
+  "description": "A2C-like: LLM V critic; the strict actor loss judges each move by the critic's assessment before and after it (the TD error); the critic loss checks against the critic's next assessment (TD); every step on its own.",
+  "spec": "actor=llm[budget=4000,apply=compress[reduce=mean]],critic=llm_v[budget=4000,apply=compress[reduce=mean]],actor_loss=llm[lesson_chars=200],critic_loss=llm[target=critic,note_chars=200],sweep=parallel",
+  "defines": {
+    "actor": "llm[memory=true]",
+    "critic": "llm_v",
+    "feedback": "none",
+    "actor_loss": "llm[inputs=none]",
+    "critic_loss": "llm[target=critic,inputs=none]",
+    "sweep": "parallel"
+  }
+}

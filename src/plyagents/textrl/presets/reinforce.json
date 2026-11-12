@@ -1,0 +1,12 @@
+{
+  "description": "REINFORCE-like: no critic; the actor loss judges each move by the game's outcome, discounted to the move (Monte Carlo, no baseline); every step on its own.",
+  "spec": "actor=llm[budget=4000,apply=compress[reduce=mean]],actor_loss=llm[lesson_chars=200,inputs=outcome],sweep=parallel",
+  "defines": {
+    "actor": "llm[memory=true]",
+    "critic": "none",
+    "feedback": "none",
+    "actor_loss": "llm[inputs=outcome]",
+    "critic_loss": "none",
+    "sweep": "parallel"
+  }
+}

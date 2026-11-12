@@ -1,4 +1,0 @@
-{
-  "description": "Epsilon-greedy: a random action with probability 0.1 in training, else the best sample mean; greedy in evaluation.",
-  "spec": "actor=tabular[scheduler=harmonic],train_selector=eps_greedy[eps=0.1]"
-}

@@ -1,0 +1,8 @@
+{
+  "description": "Greedy: the action with the best sample mean, ties at random; no exploration.",
+  "spec": "actor=tabular[scheduler=harmonic]",
+  "defines": {
+    "actor": "tabular[target=mc,scheduler=harmonic]",
+    "train_selector": "greedy"
+  }
+}

@@ -1,4 +1,0 @@
-{
-  "description": "UCB1: untried actions first, then the sample mean + 2.83 sqrt(ln N / n) in training (sqrt 2 rescaled to rewards of +-1); greedy in evaluation.",
-  "spec": "actor=tabular[scheduler=harmonic],train_selector=ucb[c=2.83]"
-}

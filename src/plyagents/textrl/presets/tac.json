@@ -1,0 +1,12 @@
+{
+  "description": "TAC, the paper's main instance (SAC-Discrete-like): LLM Q critic per state and move; the strict actor loss judges each move by the critic's view of every legal move; the critic loss checks against the critic's assessment of the next move played (TD, SARSA); every step on its own, critic from before the update. Differs from SAC-Discrete: no entropy term, a SARSA target, one critic.",
+  "spec": "actor=llm[budget=4000,apply=compress[reduce=mean]],critic=llm_q[budget=4000,apply=compress[reduce=mean]],actor_loss=llm[lesson_chars=200],critic_loss=llm[target=critic,note_chars=200],sweep=parallel",
+  "defines": {
+    "actor": "llm[memory=true]",
+    "critic": "llm_q",
+    "feedback": "none",
+    "actor_loss": "llm[inputs=none]",
+    "critic_loss": "llm[target=critic,inputs=none]",
+    "sweep": "parallel"
+  }
+}

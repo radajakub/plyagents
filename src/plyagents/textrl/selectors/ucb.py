@@ -1,0 +1,39 @@
+from __future__ import annotations
+
+import math
+from collections.abc import Sequence
+from dataclasses import dataclass
+
+import numpy as np
+
+from plyagents.textrl.configs.components import ComponentParams
+from plyagents.textrl.selectors.base import Choice, Selector
+from plyagents.textrl.utils.options import read_options
+from plyagents.textrl.utils.selection import argmax, best
+
+
+@dataclass(frozen=True, eq=True)
+class UCBParams(ComponentParams):
+    c: float = 1.0
+
+    @classmethod
+    def from_string(cls, params_string: str) -> UCBParams:
+        options = read_options(params_string, {"c"}, "ucb")
+        return cls(c=float(options.get("c", 1.0)))
+
+
+class UCB(Selector):
+    # UCB1: untried actions first, then value + c * sqrt(ln N / n)
+    def __init__(self, c: float) -> None:
+        self.c = c
+
+    def choose(self, values: Sequence[float], counts: Sequence[int], rng: np.random.Generator) -> Choice:
+        untried = [index for index, count in enumerate(counts) if count == 0]
+        if untried:
+            return Choice(int(rng.choice(untried)), "untried", untried=tuple(untried))
+        total = sum(counts)
+        scores = [value + self.c * math.sqrt(math.log(total) / count) for value, count in zip(values, counts)]
+        return Choice(argmax(scores, rng), "ucb", tuple(scores), tuple(best(scores)))
+
+    def describe(self) -> str:
+        return f"untried actions first, then estimate + {self.c} * sqrt(ln N / n)"

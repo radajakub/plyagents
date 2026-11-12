@@ -1,0 +1,12 @@
+{
+  "description": "Monte Carlo: LLM Q critic; the actor loss is also shown the outcome; the critic loss checks against the outcome; every step on its own.",
+  "spec": "actor=llm[budget=4000,apply=compress[reduce=mean]],critic=llm_q[budget=4000,apply=compress[reduce=mean]],actor_loss=llm[lesson_chars=200,inputs=outcome],critic_loss=llm[target=mc,note_chars=200],sweep=parallel",
+  "defines": {
+    "actor": "llm[memory=true]",
+    "critic": "llm_q",
+    "feedback": "none",
+    "actor_loss": "llm[inputs=outcome]",
+    "critic_loss": "llm[target=mc,inputs=none]",
+    "sweep": "parallel"
+  }
+}

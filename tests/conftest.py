@@ -15,8 +15,8 @@ from plyllm import LLM, FailureKind, LLMCallError, LLMConfig, LLMResponse, LLMTo
 from plyllm.response import OutputText
 from pydantic import ValidationError
 
-from plyagents.tac.configs.components import Services
-from plyagents.tac.utils.calls import Calls
+from plyagents.textrl.configs.components import Services
+from plyagents.textrl.utils.calls import Calls
 
 
 @pytest.fixture

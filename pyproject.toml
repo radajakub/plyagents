@@ -11,7 +11,7 @@ dependencies = [
 ]
 
 [project.entry-points."plybench.players"]
-tac = "plyagents.tac.register:register_players"
+textrl = "plyagents.textrl.register:register_players"
 
 [build-system]
 requires = ["hatchling"]
