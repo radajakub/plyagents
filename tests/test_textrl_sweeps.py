@@ -65,18 +65,18 @@ def _judged(lesson: str) -> str:
 
 
 def test_the_backward_sweep_goes_from_the_last_step_to_the_first_and_carries_each_check_into_the_target_before_it(stub_calls):
-    # the calls in the sweep's order: the critic loss then the actor loss at step 3, then 2, then 1
+    # the calls in the sweep's order: the critic loss then the actor loss at step 3, then 2, then 1, each naming the steps whose check its prompt shows
     answers = [_checked("note 3"), _judged("lesson 3"), _checked("note 2"), _judged("lesson 2"), _checked("note 1"), _judged("lesson 1")]
     calls, _, recorded = stub_calls(answers)
     judged = asyncio.run(BackwardSweep().run(_steps(), -1.0, {}, _FixedCritic(["even", "worse", "lost"]), _losses(), calls))
 
     assert [(call.role, call.about) for call in recorded] == [
         ("critic_loss", {"steps": [3]}),
-        ("actor_loss", {"steps": [3]}),
-        ("critic_loss", {"steps": [2]}),
-        ("actor_loss", {"steps": [2]}),
-        ("critic_loss", {"steps": [1]}),
-        ("actor_loss", {"steps": [1]}),
+        ("actor_loss", {"steps": [3], "notes": [3]}),
+        ("critic_loss", {"steps": [2], "notes": [3]}),
+        ("actor_loss", {"steps": [2], "notes": [2, 3]}),
+        ("critic_loss", {"steps": [1], "notes": [2]}),
+        ("actor_loss", {"steps": [1], "notes": [1, 2]}),
     ]
     critic_3, actor_3, critic_2, actor_2 = (call.prompt_message for call in recorded[:4])
     # the last step's target is the outcome; the one before carries the check of the next assessment

@@ -23,12 +23,37 @@ class GameLearning:
     #   writes     the update whose actor and critic parts hold the memory writes the game took part in: the game's own; for a batch, the batch's,
     #              given with the batch's last game only (None for the others)
     #   batch      the batch's folder name (batch_<i>, epoch), None for a game learned from alone
+    #   update     the update the game was learned in: its own, or the batch's (for every game of the batch: its gradients per step)
+    #   rounds     for a game of a batch, every game of it as (round, its first step in the batch's numbering of steps), in order; empty for a record
+    #              that does not give the first steps, and for a game learned from alone
     record: dict[str, Any]
     reference: dict[str, Any] | None
     calls: list[dict[str, Any]] = field(default_factory=list)
     game: int | None = None
     writes: dict[str, Any] | None = None
     batch: str | None = None
+    update: dict[str, Any] | None = None
+    rounds: tuple[tuple[int, int], ...] = ()
+
+    def offset(self) -> int | None:
+        # what the batch's numbering of steps adds to this game's own (0 for a game learned from alone); None when the record does not say
+        if self.batch is None:
+            return 0
+        return next((first - 1 for round_, first in self.rounds if round_ == self.game), None)
+
+    def batch_step(self, step: int) -> tuple[int, int] | None:
+        # the game of the batch a step in the batch's numbering is of, as (round, its own step); None when the record does not say
+        found = [(round_, step - first + 1) for round_, first in self.rounds if first <= step]
+        return found[-1] if found else None
+
+    def block_calls(self, role: str, step: int) -> list[int]:
+        # the usable calls of a block's role (backward, apply) about a step in the numbering of the update: the blocks of a batch call for all its
+        # games at once, so their calls name no game
+        return [
+            index
+            for index, call in enumerate(self.calls)
+            if call["role"] == role and call.get("failure") is None and "game" not in (call.get("about") or {}) and step in (call.get("about") or {}).get("steps", [])
+        ]
 
     def game_calls(self) -> list[dict[str, Any]]:
         # the calls about this game: all of its own file, or those of the batch's about it (the blocks' backward and writes are the batch's, not a game's)
@@ -68,7 +93,7 @@ def game_learning(learner: Path, round_: int) -> GameLearning | None:
     if not isinstance(update, dict):
         return None
     if update.get("record") is not None:
-        return GameLearning(update["record"], update.get("reference"), read_json(game / LEARNER_CALLS) or [], None, update)
+        return GameLearning(update["record"], update.get("reference"), read_json(game / LEARNER_CALLS) or [], None, update, None, update)
     # a game of a batch: its own update holds its counts only; its judgement and the writes are in the batch's update
     for folder in _batches(learner) if learner.is_dir() else []:
         batch = read_json(folder / UPDATE_FILE)
@@ -76,7 +101,8 @@ def game_learning(learner: Path, round_: int) -> GameLearning | None:
         entry = next((item for item in games if item.get("round") == round_), None)
         if entry is None:
             continue
-        record = {name: value for name, value in entry.items() if name not in ("round", "reference")}
+        record = {name: value for name, value in entry.items() if name not in ("round", "first_step", "reference")}
         last = games[-1].get("round") == round_
-        return GameLearning(record, entry.get("reference"), read_json(folder / LEARNER_CALLS) or [], round_, batch if last else None, folder.name)
+        rounds = tuple((item["round"], item["first_step"]) for item in games) if all("first_step" in item for item in games) else ()
+        return GameLearning(record, entry.get("reference"), read_json(folder / LEARNER_CALLS) or [], round_, batch if last else None, folder.name, batch, rounds)
     return GameLearning({}, update.get("reference"))

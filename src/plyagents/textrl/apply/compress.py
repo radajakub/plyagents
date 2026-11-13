@@ -79,11 +79,12 @@ class CompressApply(Apply):
         text = answer.output.strip()
         return Shortened(text[:keep], len(text) > keep, answer.index)
 
-    async def reduce(self, parts: tuple[str, ...], share: int | None, calls: Calls, role: str, about: dict[str, Any]) -> str:
+    async def reduce(self, parts: tuple[str, ...], share: int | None, calls: Calls, role: str, about: dict[str, Any]) -> tuple[str, int | None]:
         if self.reduce_type is ReduceType.JOIN:
             return await super().reduce(parts, share, calls, role, about)
         limit = f" of at most {share} characters" if share is not None else ""
-        return (await calls.text(role, self.model.config, SYSTEM_REDUCE, COMBINE.format(count=len(parts), limit=limit, lessons=_numbered(parts)), about)).output.strip()
+        answer = await calls.text(role, self.model.config, SYSTEM_REDUCE, COMBINE.format(count=len(parts), limit=limit, lessons=_numbered(parts)), about)
+        return answer.output.strip(), answer.index
 
     async def merge(
         self, key: str, old: str, parts: tuple[str, ...], alpha: float, budget: int | None, calls: Calls, role: str, steps: tuple[int, ...], writes_before: int

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from difflib import SequenceMatcher
 from typing import Any
 
@@ -85,8 +85,9 @@ class Apply(ABC):
         else:
             # an empty entry needs no shortening, so no call
             shortened = await self.shorten(old, keep, calls, role, about) if old else Shortened("", False)
-        lesson = parts[0] if len(parts) == 1 else await self.reduce(parts, budget - keep if budget is not None and keep is not None else None, calls, role, about)
-        return self.assemble(key, old, parts, alpha, budget, keep, shortened, lesson, steps, writes_before)
+        share = budget - keep if budget is not None and keep is not None else None
+        lesson, reduce_call = (parts[0], None) if len(parts) == 1 else await self.reduce(parts, share, calls, role, about)
+        return self.assemble(key, old, parts, alpha, budget, keep, shortened, lesson, steps, writes_before, reduce_call)
 
     @staticmethod
     def assemble(
@@ -100,16 +101,18 @@ class Apply(ABC):
         lesson: str,
         steps: tuple[int, ...],
         writes_before: int,
+        reduce_call: int | None = None,
     ) -> MemoryWrite:
         # the kept notes, then the lesson; the lesson is cut, not the kept notes: it was told its share (alpha B)
         new = SEPARATOR.join(part for part in (shortened.text, lesson) if part)
         over = budget is not None and len(new) > budget
         new = new[:budget] if over else new
-        return MemoryWrite(
+        written = MemoryWrite(
             key, old, lesson, alpha, shortened.text, new, shortened.cut or over, steps, writes_before, budget, keep, shortened.call, shortened.cut, over, parts, changed(old, new)
         )
+        return replace(written, reduce_call=reduce_call)
 
-    async def reduce(self, parts: tuple[str, ...], share: int | None, calls: Calls, role: str, about: dict[str, Any]) -> str:
-        # the lesson of several gradients of one key: joined in step order (their sum), as the TAC wrote them before batches; a subclass may reduce
-        # them to their mean within the share
-        return SEPARATOR.join(parts)
+    async def reduce(self, parts: tuple[str, ...], share: int | None, calls: Calls, role: str, about: dict[str, Any]) -> tuple[str, int | None]:
+        # the lesson of several gradients of one key, with the index of the call that made it (None: no call): joined in step order (their sum), as
+        # the TAC wrote them before batches; a subclass may reduce them to their mean within the share
+        return SEPARATOR.join(parts), None

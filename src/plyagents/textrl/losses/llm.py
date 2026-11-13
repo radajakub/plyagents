@@ -47,8 +47,16 @@ class LLMLoss(Loss):
     async def ask_game(self, system: str, prompt: str, calls: Calls, about: dict[str, Any], steps: int) -> tuple[dict[int, StepFeedback], list[dict[str, Any]]]:
         raise NotImplementedError
 
+    # shown: collects the steps (1-based) whose correction the prompt shows
     def step_prompt(
-        self, index: int, steps: list[TextRLStep], assessments: list[Assessment], outcome: float, history: Mapping[str, KeyCounts], corrections: list[str | None] | None = None
+        self,
+        index: int,
+        steps: list[TextRLStep],
+        assessments: list[Assessment],
+        outcome: float,
+        history: Mapping[str, KeyCounts],
+        corrections: list[str | None] | None = None,
+        shown: list[int] | None = None,
     ) -> str:
         raise NotImplementedError(f"{type(self).__name__} judges whole games only")
 
@@ -72,8 +80,10 @@ class LLMLoss(Loss):
     ) -> StepFeedback:
         if not self.asked(steps[index], assessments[index], False):
             return StepFeedback()
-        prompt = self.step_prompt(index, steps, assessments, outcome, history, corrections)
-        return await self.ask_step(with_rules(self.system, steps), prompt, calls, {"steps": [index + 1]})
+        # the call names the steps whose corrections its prompt showed (the backward sweep), so the record says which verdicts it read
+        shown: list[int] = []
+        prompt = self.step_prompt(index, steps, assessments, outcome, history, corrections, shown)
+        return await self.ask_step(with_rules(self.system, steps), prompt, calls, {"steps": [index + 1], **({"notes": shown} if shown else {})})
 
     def inputs_record(self, steps: list[TextRLStep], assessments: list[Assessment], outcome: float, history: Mapping[str, KeyCounts]) -> dict[str, Any]:
         # what the prompt showed besides the moves and the outcome, by part: the inputs named, the critic's change per step, the earlier games per step

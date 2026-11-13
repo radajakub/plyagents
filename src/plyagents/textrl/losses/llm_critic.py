@@ -114,7 +114,7 @@ class LLMCriticLoss(LLMLoss, CriticLoss):
         head = f"The situation, as the agent saw it:\n{step.key}" if alone else f"Step {index + 1}:\n{step.key}"
         return f"{head}\nMove: {step.action or 'no valid move'}\nThe critic's assessment of {what}: {assessed(step, assessment) or 'none'}"
 
-    def _target(self, index: int, steps: list[TextRLStep], assessments: list[Assessment], outcome: float, corrections: list[str | None]) -> str:
+    def _target(self, index: int, steps: list[TextRLStep], assessments: list[Assessment], outcome: float, corrections: list[str | None], shown: list[int] | None = None) -> str:
         # the TD target: the critic's next assessment, with what the check of it found when the sweep checked it first (the backward sweep)
         if self.target is TargetType.MC or index + 1 == len(steps):
             return ENDED + outcome_line(outcome) if index + 1 == len(steps) else f"The game ended later. {return_line(outcome, index, len(steps), self.gamma)}"
@@ -124,6 +124,8 @@ class LLMCriticLoss(LLMLoss, CriticLoss):
         target += next_discount(self.gamma)
         if index + 1 < len(corrections) and (note := corrections[index + 1]):
             target += "\n" + CHECKED.format(note=note)
+            if shown is not None:
+                shown.append(index + 2)
         return f"{target}\n{return_line(outcome, index, len(steps), self.gamma)}" if "outcome" in self.inputs else target
 
     def _worth(self, assessments: list[Assessment]) -> dict[str, str]:
@@ -131,9 +133,16 @@ class LLMCriticLoss(LLMLoss, CriticLoss):
         return {"worth": "this move" if moves else "the situation", "limit": f", at most {self.note_chars} characters" if self.note_chars is not None else ""}
 
     def step_prompt(
-        self, index: int, steps: list[TextRLStep], assessments: list[Assessment], outcome: float, history: Mapping[str, KeyCounts], corrections: list[str | None] | None = None
+        self,
+        index: int,
+        steps: list[TextRLStep],
+        assessments: list[Assessment],
+        outcome: float,
+        history: Mapping[str, KeyCounts],
+        corrections: list[str | None] | None = None,
+        shown: list[int] | None = None,
     ) -> str:
-        target = self._target(index, steps, assessments, outcome, corrections or [])
+        target = self._target(index, steps, assessments, outcome, corrections or [], shown)
         return STEP_PROMPT.format(step=self._step(index, steps, assessments, True), target=target, **self._worth(assessments))
 
     def game_prompt(self, steps: list[TextRLStep], assessments: list[Assessment], outcome: float, history: Mapping[str, KeyCounts]) -> str:

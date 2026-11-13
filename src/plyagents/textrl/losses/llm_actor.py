@@ -62,8 +62,12 @@ ENDED = "After this move the game ended. "
 INPUTS = ("outcome", "trajectory", "memory", "delta", "q", "history", "reasoning")
 
 
-def _at(corrections: list[str | None], index: int) -> str | None:
-    return corrections[index] if index < len(corrections) else None
+def _at(corrections: list[str | None], index: int, shown: list[int] | None) -> str | None:
+    # the correction of step index, noted in shown (1-based) when there is one, as the prompt shows it
+    note = corrections[index] if index < len(corrections) else None
+    if note and shown is not None:
+        shown.append(index + 1)
+    return note
 
 
 class _Judged(BaseModel):
@@ -126,13 +130,15 @@ class LLMActorLoss(LLMLoss, ActorLoss):
     def asked(self, step: TextRLStep, assessment: Assessment, whole_game: bool) -> bool:
         return whole_game or step.action is not None
 
-    def _critic(self, index: int, steps: list[TextRLStep], assessments: list[Assessment], outcome: float, alone: bool, corrections: list[str | None]) -> list[str]:
+    def _critic(
+        self, index: int, steps: list[TextRLStep], assessments: list[Assessment], outcome: float, alone: bool, corrections: list[str | None], shown: list[int] | None
+    ) -> list[str]:
         # what the critic says of the step: every legal move (Q), or the situation before and after the move (V); alone: the step is shown without the
         # rest of the game, so the next situation is written out. A correction of an assessment by the critic loss (the backward sweep) follows it
         assessment = assessments[index]
         if not assessment.text:
             return []
-        checked = [CHECKED.format(note=note)] if (note := _at(corrections, index)) else []
+        checked = [CHECKED.format(note=note)] if (note := _at(corrections, index, shown)) else []
         if assessment.moves:
             return [f"The critic's assessment of each legal move:\n{assessment.text}", *checked]
         lines = [f"The critic's assessment of the situation: {assessment.text}", *checked]
@@ -141,12 +147,20 @@ class LLMActorLoss(LLMLoss, ActorLoss):
         elif alone:
             following = steps[index + 1]
             lines.append(f"The next situation the agent moved in:\n{following.key}\nThe critic's assessment of it: {assessments[index + 1].text}{next_discount(self.gamma)}")
-            if note := _at(corrections, index + 1):
+            if note := _at(corrections, index + 1, shown):
                 lines.append(CHECKED.format(note=note))
         return lines
 
     def _step(
-        self, index: int, steps: list[TextRLStep], assessments: list[Assessment], outcome: float, history: Mapping[str, KeyCounts], alone: bool, corrections: list[str | None]
+        self,
+        index: int,
+        steps: list[TextRLStep],
+        assessments: list[Assessment],
+        outcome: float,
+        history: Mapping[str, KeyCounts],
+        alone: bool,
+        corrections: list[str | None],
+        shown: list[int] | None = None,
     ) -> str:
         step, assessment = steps[index], assessments[index]
         lines = [f"The situation, as the agent saw it:\n{step.key}" if alone else f"Step {index + 1}:\n{step.key}"]
@@ -155,7 +169,7 @@ class LLMActorLoss(LLMLoss, ActorLoss):
         if "reasoning" in self.inputs and step.reasoning:
             lines.append(f"The agent's reasoning for this move:\n{step.reasoning.strip()}")
         lines.append(f"Move: {step.action or 'no valid move'}")
-        lines.extend(self._critic(index, steps, assessments, outcome, alone, corrections))
+        lines.extend(self._critic(index, steps, assessments, outcome, alone, corrections, shown))
         if "delta" in self.inputs:
             lines.append(delta_line(deltas(assessments, outcome, self.role, self.gamma)[index], self.gamma))
         if "q" in self.inputs:
@@ -170,9 +184,16 @@ class LLMActorLoss(LLMLoss, ActorLoss):
         return {"grades": ", ".join(GRADES), "limit": f", at most {self.lesson_chars} characters" if self.lesson_chars is not None else "", "track": TRACK if self.track else ""}
 
     def step_prompt(
-        self, index: int, steps: list[TextRLStep], assessments: list[Assessment], outcome: float, history: Mapping[str, KeyCounts], corrections: list[str | None] | None = None
+        self,
+        index: int,
+        steps: list[TextRLStep],
+        assessments: list[Assessment],
+        outcome: float,
+        history: Mapping[str, KeyCounts],
+        corrections: list[str | None] | None = None,
+        shown: list[int] | None = None,
     ) -> str:
-        return STEP_PROMPT.format(step=self._step(index, steps, assessments, outcome, history, True, corrections or []), **self._instructions())
+        return STEP_PROMPT.format(step=self._step(index, steps, assessments, outcome, history, True, corrections or [], shown), **self._instructions())
 
     def game_prompt(self, steps: list[TextRLStep], assessments: list[Assessment], outcome: float, history: Mapping[str, KeyCounts]) -> str:
         shown = "\n\n".join(self._step(index, steps, assessments, outcome, history, False, []) for index in range(len(steps)))

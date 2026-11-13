@@ -226,7 +226,14 @@ class TextRLPlayer(LearnablePlayer[TextRLUpdate]):
         calls = Calls(self.services.llm, derive_seed(*seeds, "batch") if all(seed is not None for seed in seeds) else None, self.record_call)
         judged = await asyncio.gather(*(self._judge(game, self._batch_start, calls.fork(game.seed, {"game": game.game_round})) for game in games))
         batch = [game for game, _, _ in judged]
-        record = {"games": [{"round": game.game_round, **game_record, "reference": reference.to_dict()} for game, (_, game_record, reference) in zip(games, judged)]}
+        # the blocks number the batch's steps as one (the writes' steps, the gradients): each game's first step in that numbering
+        firsts = [1 + sum(len(game.steps) for game in batch[:index]) for index in range(len(batch))]
+        record = {
+            "games": [
+                {"round": game.game_round, "first_step": first, **game_record, "reference": reference.to_dict()}
+                for game, first, (_, game_record, reference) in zip(games, firsts, judged)
+            ]
+        }
         return TextRLUpdate(await self.actor.propose_batch(batch, calls), await self.critic.propose_batch(batch, calls), None, record)
 
     def _record(self, steps: list[TextRLStep], history: dict[str, KeyCounts], assessments: list[Assessment], feedback: list[StepFeedback], outcome: float) -> ReferenceUpdate:

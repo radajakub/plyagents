@@ -78,10 +78,46 @@ def _move_events(context: TraceContext, events: list[Event]) -> dict[int, int]:
     return keys
 
 
-def _learn_events(learning: GameLearning, keys: dict[int, int], events: list[Event], learned: Path) -> None:
+def _block_call(learning: GameLearning, role: str, step: int) -> dict[str, Any] | None:
+    # the usable call of a block's role about a step in the update's numbering; the last one when several answered
+    found = learning.block_calls(role, step)
+    return _call(learning.calls, found[-1]) if found else None
+
+
+def _loss_events(learning: GameLearning, critic_events: dict[int, int], events: list[Event]) -> dict[str, dict[int, int]]:
+    # the critic's and then the actor's own loss per step: the verdict each gave, with the call that gave it and, from the backward sweep, the critic
+    # loss's verdicts its prompt showed (the call's about["notes"]); gives the event of every step per block
+    losses = learning.record.get("losses") or {}
+    found: dict[str, dict[int, int]] = {}
+    planned: list[tuple[str, int, dict[str, Any], dict[str, Any] | None]] = []
+    for name in ("critic", "actor"):
+        part = losses.get(name)
+        if part is None:
+            continue
+        found[name] = {}
+        for number, verdict in enumerate(part.get("verdicts", []), start=1):
+            call = _call_about(learning, f"{name}_loss", number)
+            if call is None and not any(verdict.get(field) for field in ("grade", "lesson", "critic_note")):
+                continue
+            # numbered before they are added, so a step's event can name the critic loss's event of a later step
+            found[name][number] = len(events) + len(planned)
+            planned.append((name, number, verdict, call))
+    checks = (losses.get("critic") or {}).get("verdicts", [])
+    for name, number, verdict, call in planned:
+        notes = tuple(
+            Value("note", checks[shown - 1].get("critic_note") if shown <= len(checks) else None, Source("event", index=found.get("critic", {}).get(shown)))
+            for shown in ((call or {}).get("about") or {}).get("notes", [])
+        )
+        inputs = (Value("assessment", None, Source("event", index=critic_events.get(number))), *notes, Value("inputs", losses[name].get("inputs")))
+        events.append(Event("learn", f"{name}_loss", inputs, (Value("verdict", verdict),), number, call))
+    return found
+
+
+def _learn_events(learning: GameLearning, keys: dict[int, int], events: list[Event], learned: Path, steps: int) -> dict[str, set[tuple[str, int]]]:
     # how the game was learned from, in the order the player learns: the critic per step, the feedback (or the critic's and the actor's own losses per
-    # step, and the blocks' backward passes), the writes of each memory or the samples of each table, the reference, and the state it left. A game of
-    # a batch shows the batch's writes with its last game
+    # step, merged by the sweep), each block's backward pass per step, the writes of each memory or the samples of each table, the reference, and the
+    # state it left. A game of a batch shows its own steps; the batch's writes come with its last game, each gradient from the game whose step gave
+    # it. Gives, per memory, the keys written from this game's steps as (key, step)
     update, calls, record = learning.writes or {}, learning.calls, learning.record
     critic_events = {}
     for number, assessment in enumerate(record.get("assessments", []), start=1):
@@ -96,54 +132,94 @@ def _learn_events(learning: GameLearning, keys: dict[int, int], events: list[Eve
         critic_events[number] = len(events)
         events.append(Event("learn", "critic", inputs, outputs, number, _call_about(learning, "critic", number)))
     feedback = record.get("feedback")
+    loss_events = _loss_events(learning, critic_events, events)
     feedback_event = None
-    if feedback is not None:
+    if feedback is not None and loss_events:
+        # the own losses' verdicts merged into the one the blocks read (Sweep.judged)
+        inputs = tuple(Value("verdict", None, Source("event", index=index)) for name in ("critic", "actor") for index in loss_events.get(name, {}).values())
+        feedback_event = len(events)
+        events.append(Event("learn", "sweep", inputs, (Value("verdicts", feedback.get("verdicts")),)))
+    elif feedback is not None:
         inputs = (*(Value("assessment", None, Source("event", index=index)) for index in critic_events.values()), Value("inputs", feedback.get("inputs")))
         outputs = (Value("verdicts", feedback.get("verdicts")), Value("dropped", feedback.get("dropped")))
         feedback_event = len(events)
         events.append(Event("learn", "feedback", inputs, outputs, None, _call_about(learning, "feedback")))
-    from_feedback = Source("event", index=feedback_event) if feedback_event is not None else None
-    # the critic's and the actor's own losses, per step: the verdict each gave, with the call that gave it
-    loss_events: dict[str, dict[int, int]] = {}
-    for name in ("critic", "actor"):
-        part = (record.get("losses") or {}).get(name)
-        if part is None:
+
+    def verdict_source(memory: str, number: int) -> Source | None:
+        # where a block's verdict of a step came from: its own loss when it has one (its part of the merged verdict is that loss's), else the feedback
+        index = loss_events.get(memory, {}).get(number, feedback_event)
+        return Source("event", index=index) if index is not None else None
+
+    # each block's backward pass per step: the verdict in, the gradient out (recorded with the update; an older record only links the calls)
+    offset = learning.offset()
+    backward_events: dict[str, dict[int, int]] = {memory: {} for memory in MEMORIES}
+    for memory, role in (("actor", "backward"), ("critic", "backward_critic")):
+        part = (learning.update or {}).get(memory) or {}
+        gradients, limits = part.get("gradients") or [], part.get("limits") or []
+        if offset is None:
             continue
-        loss_events[name] = {}
-        for number, verdict in enumerate(part.get("verdicts", []), start=1):
-            call = _call_about(learning, f"{name}_loss", number)
-            if call is None and not any(verdict.get(field) for field in ("grade", "lesson", "critic_note")):
+        for number in range(1, steps + 1):
+            index = number + offset - 1
+            gradient = gradients[index] if index < len(gradients) else None
+            call = _block_call(learning, role, number + offset) if learning.batch is not None else _call_about(learning, role, number)
+            if gradient is None and call is None:
                 continue
-            inputs = (Value("assessment", None, Source("event", index=critic_events.get(number))), Value("inputs", part.get("inputs")))
-            loss_events[name][number] = len(events)
-            events.append(Event("learn", f"{name}_loss", inputs, (Value("verdict", verdict),), number, call))
-    # the blocks' own backward passes (an LLM backward), per step, for a game learned from alone (a batch numbers its steps across its games)
-    if learning.batch is None:
-        for name, role in (("actor", "backward"), ("critic", "backward_critic")):
-            for number in sorted({step for index in learning.calls_of(role) for step in (calls[index].get("about") or {}).get("steps", [])}):
-                source = Source("event", index=loss_events.get(name, {}).get(number, feedback_event))
-                events.append(Event("learn", f"{name}.backward", (Value("feedback", None, source),), (), number, _call_about(learning, role, number)))
+            inputs = (Value("verdict", None, verdict_source(memory, number)), Value("limit", limits[index] if index < len(limits) else None))
+            backward_events[memory][number] = len(events)
+            events.append(Event("learn", f"{memory}.backward", inputs, (Value("gradient", gradient),), number, call))
+
+    def part_source(memory: str, step: int) -> Source | None:
+        # a gradient of a write, by its step in the update's numbering: this game's backward event (or its verdict), or the step of another game of
+        # the batch; None when the record does not say which game
+        found = learning.batch_step(step) if learning.batch is not None else (learning.game, step)
+        if found is None:
+            return None
+        round_, number = found
+        if round_ != learning.game:
+            return Source("batch", index=number, round=round_)
+        index = backward_events[memory].get(number)
+        return Source("event", index=index) if index is not None else verdict_source(memory, number)
+
+    written: dict[str, set[tuple[str, int]]] = {memory: set() for memory in MEMORIES}
     for memory in MEMORIES:
         part = update.get(memory) or {}
         for write in part.get("writes", []):
-            loss = loss_events.get(memory)
-            source = Source("event", index=loss[write["steps"][0]]) if loss and write.get("steps") and write["steps"][0] in loss else from_feedback
+            parts = write.get("parts") or []
+            if parts:
+                lessons = tuple(Value("part", text, part_source(memory, step)) for text, step in zip(parts, write.get("steps", [])))
+            else:
+                # an older write: the lesson alone, from the loss of its first step or the feedback
+                first = (write.get("steps") or [None])[0]
+                lessons = (Value("lesson", write["lesson"], verdict_source(memory, first) if first is not None else None),)
             inputs = (
                 Value("old", write["old"], Source("memory", memory, write["key"])),
-                Value("lesson", write["lesson"], source),
-                *(Value(name, write.get(name)) for name in ("parts", "steps", "alpha", "writes_before", "budget", "keep")),
+                *lessons,
+                *(Value(name, write.get(name)) for name in ("steps", "alpha", "writes_before", "budget", "keep")),
             )
-            outputs = tuple(Value(name, write.get(name)) for name in ("compressed", "new", "cut", "cut_old", "cut_lesson", "changed"))
-            events.append(Event("learn", f"{memory}.apply", inputs, outputs, None, _call(calls, write.get("call"))))
+            names = ("lesson", "compressed", "new", "cut", "cut_old", "cut_lesson", "changed") if parts else ("compressed", "new", "cut", "cut_old", "cut_lesson", "changed")
+            outputs = tuple(Value(name, write.get(name)) for name in names)
+            # one call at most per write: the shortening (or the rewrite, or both with the reduction), or the reduction alone
+            call = write.get("call") if write.get("call") is not None else write.get("reduce_call")
+            events.append(Event("learn", f"{memory}.apply", inputs, outputs, None, _call(calls, call)))
+            if offset is not None:
+                written[memory] |= {(write["key"], step - offset) for step in write.get("steps", []) if 1 <= step - offset <= steps}
         for sample in part.get("samples", []):
             events.append(Event("learn", memory, (Value("target", sample["target"], Source(sample["source"])),), (Value("sample", sample),)))
     if learning.batch is not None:
-        events.append(Event("learn", "batch", (), (Value("batch", learning.batch), Value("writes", learning.writes is not None))))
+        rounds = [round_ for round_, _ in learning.rounds]
+        outputs = (
+            Value("batch", learning.batch),
+            Value("writes", learning.writes is not None),
+            Value("rounds", rounds or None),
+            Value("first_step", None if offset is None else offset + 1),
+        )
+        events.append(Event("learn", "batch", (), outputs))
     reference = learning.reference
     if reference is not None:
         events.append(Event("learn", "reference", (Value("outcome", reference.get("outcome")),), (Value("steps", reference.get("steps")),)))
     # the state the game left
     events.append(Event("learn", "commit", (), (Value("state", (learned / LEARNER_STATE / STATE_FILE).as_posix()),)))
+    return written
 
 
 def _textual(description: dict[str, Any] | None, memory: str) -> bool:
@@ -156,14 +232,14 @@ def _textual(description: dict[str, Any] | None, memory: str) -> bool:
     return config.get("kind") in ("llm_v", "llm_q")
 
 
-def _memories(context: TraceContext, learning: GameLearning | None) -> tuple[MemoryView, ...]:
-    # each textual memory as the game started from it, every entry with the steps that read it and the steps whose lessons were written into it
+def _memories(context: TraceContext, learning: GameLearning | None, written: dict[str, set[tuple[str, int]]]) -> tuple[MemoryView, ...]:
+    # each textual memory as the game started from it, every entry with the steps that read it and the steps of this game whose lessons were written
+    # into it (written, from the learning events)
     before = ((context.ending or {}).get("state") or {}).get("before")
     state = read_json(context.resolve(before) / STATE_FILE) if before else None
     if not isinstance(state, dict):
         return ()
     record = learning.record if learning is not None else {}
-    update = learning.writes if learning is not None else None
     reads: dict[str, dict[str, list[int]]] = {memory: {} for memory in MEMORIES}
     for number, step in enumerate(context.steps, start=1):
         for read in (step.data or {}).get("read") or []:
@@ -177,8 +253,10 @@ def _memories(context: TraceContext, learning: GameLearning | None) -> tuple[Mem
         # only a textual memory has entries to show (a tabular one holds tables), and the description says which component keeps one
         if not _textual(context.description, memory) or not isinstance(entries, dict):
             continue
-        written = {write["key"]: tuple(write.get("steps", ())) for write in ((update or {}).get(memory) or {}).get("writes", [])}
-        keys = list(entries) + [key for key in [*reads[memory], *written] if key not in entries]
+        steps_written: dict[str, tuple[int, ...]] = {}
+        for key, step in sorted(written.get(memory, set()), key=lambda item: item[1]):
+            steps_written[key] = (*steps_written.get(key, ()), step)
+        keys = list(entries) + [key for key in [*reads[memory], *steps_written] if key not in entries]
         views.append(
             MemoryView(
                 memory,
@@ -191,7 +269,8 @@ def _memories(context: TraceContext, learning: GameLearning | None) -> tuple[Mem
                         dict(entries.get(key, {}).get("actions", {})),
                         entries.get(key, {}).get("writes", 0),
                         tuple(dict.fromkeys(reads[memory].get(key, []))),
-                        written.get(key, ()),
+                        steps_written.get(key, ()),
+                        entries.get(key, {}).get("samples"),
                     )
                     for key in dict.fromkeys(keys)
                 ),
@@ -207,8 +286,7 @@ def read_textrl(context: TraceContext) -> PlayerTrace:
     keys = _move_events(context, events)
     learned = context.learned
     learning = game_learning(learned.parent, int(learned.name.removeprefix("game_"))) if learned is not None and learned.name.startswith("game_") else None
-    if learned is not None and learning is not None:
-        _learn_events(learning, keys, events, learned)
+    written = _learn_events(learning, keys, events, learned, len(context.steps)) if learned is not None and learning is not None else {}
     return PlayerTrace(
-        context.player.key, context.player.to_string(), context.description, components(context.description), tuple(events), _memories(context, learning), context.ending
+        context.player.key, context.player.to_string(), context.description, components(context.description), tuple(events), _memories(context, learning, written), context.ending
     )

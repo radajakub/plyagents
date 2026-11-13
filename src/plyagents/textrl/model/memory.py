@@ -68,6 +68,9 @@ class MemoryWrite:
     # similarity of the new entry to the old (difflib), the realised step
     parts: tuple[str, ...] = ()
     changed: float | None = None
+    # the index of the call that reduced several gradients into the lesson (compress[reduce=mean] when the entry needed no shortening); None when
+    # the lesson came from no call of its own (one gradient, joined, or made in the same call as the shortening: call)
+    reduce_call: int | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> MemoryWrite:
@@ -77,16 +80,21 @@ class MemoryWrite:
 @dataclass(frozen=True)
 class MemoryUpdate(ComponentUpdate):
     # what one game teaches a memory: the visits (key and action of every step, None for a failed move), the feedback it was
-    # given per step, and the writes. More than commit needs: update.json is then the full trace of the game's learning
+    # given per step, and the writes. More than commit needs: update.json is then the full trace of the game's learning. Per step as well, what the
+    # block's backward pass wrote (the gradient, None: nothing) and the length it was given for it (its share alpha B, None without a budget)
     visits: tuple[tuple[str, str | None], ...]
     feedback: tuple[StepFeedback, ...]
     writes: tuple[MemoryWrite, ...]
+    gradients: tuple[str | None, ...] = ()
+    limits: tuple[int | None, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "visits": [list(visit) for visit in self.visits],
             "feedback": [step.to_dict() for step in self.feedback],
             "writes": [asdict(write) for write in self.writes],
+            "gradients": list(self.gradients),
+            "limits": list(self.limits),
         }
 
     @classmethod
@@ -95,6 +103,8 @@ class MemoryUpdate(ComponentUpdate):
             tuple((key, action) for key, action in data["visits"]),
             tuple(StepFeedback.from_dict(step) for step in data["feedback"]),
             tuple(MemoryWrite.from_dict(write) for write in data["writes"]),
+            tuple(data.get("gradients", ())),
+            tuple(data.get("limits", ())),
         )
 
     def apply_to(self, memory: KeyedMemory) -> None:

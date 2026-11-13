@@ -95,7 +95,8 @@ class MemoryBlock(Block[MemoryUpdate]):
         feedback = [verdict if key is not None else verdict.without_gradient(self.kind) for verdict, key in zip(feedback, keys)]
         tapes = [self.tape(step, assessment, self.share(entry.key)) for step, entry, assessment in zip(steps, written, assessments)]
         gradients = await self.backward.local(tapes, feedback, calls, self.backward_role)
-        return await self.apply.update(self.memory, written, feedback, gradients, self.scheduler, self.budget, calls, self.apply_role)
+        update = await self.apply.update(self.memory, written, feedback, gradients, self.scheduler, self.budget, calls, self.apply_role)
+        return replace(update, gradients=tuple(gradients), limits=tuple(tape.limit for tape in tapes))
 
     async def propose_batch(self, games: list[JudgedGame], calls: Calls) -> MemoryUpdate | None:
         # the games' steps in order as one: each key gets one write for all its gradients in the batch (the outcome is not read)

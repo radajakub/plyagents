@@ -405,8 +405,13 @@ def test_a_saved_game_reads_back_as_components_events_and_memories(tmp_path, mon
     learn = [event for event in textrl.events if event.phase == "learn"]
     [feedback] = [event for event in learn if event.component == "feedback"]
     assert feedback.call is not None and feedback.call["role"] == "feedback"
+    # each write's gradient from the backward pass of its step (identity: the feedback's lesson), which read the feedback
     writes = [event for event in learn if event.component == "actor.apply"]
-    assert writes and all(event.inputs[1].source == Source("event", index=textrl.events.index(feedback)) for event in writes)
+    backward = {event.step: event for event in learn if event.component == "actor.backward"}
+    assert writes and all(
+        event.inputs[1].name == "part" and event.inputs[1].source == Source("event", index=textrl.events.index(backward[event.inputs[2].value[0]])) for event in writes
+    )
+    assert all(event.inputs[0].source == Source("event", index=textrl.events.index(feedback)) for event in backward.values())
     assert all(event.call["role"] == "apply" for event in writes if event.call is not None)
     assert [event.component for event in learn][-2:] == ["reference", "commit"]
     # the memory as the game started from it: the entries it read are marked with their steps
