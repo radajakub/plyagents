@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 authors = [{ name = "Jakub Rada", email = "dev.jakubrada@icloud.com" }]
 dependencies = [
-    "plybench[api,viz]>=4.14.1,<5",
+    "plybench[api,viz]>=4.15.0,<5",
     "plyllm>=1.7.0,<2",
 ]
 
