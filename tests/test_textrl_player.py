@@ -311,7 +311,7 @@ def test_a_tabular_move_records_its_estimates_and_its_pick_and_a_sample_its_sour
     assert sources[-1] == "outcome" and set(sources[:-1]) <= {"critic"}
 
 
-def test_a_tabular_game_reads_back_as_estimates_picks_and_samples(tmp_path, monkeypatch):
+def test_a_tabular_game_reads_back_as_estimates_picks_samples_and_its_tables(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     harness = _harness()
     asyncio.run(harness.run(sync=True))
@@ -323,5 +323,15 @@ def test_a_tabular_game_reads_back_as_estimates_picks_and_samples(tmp_path, monk
     assert [event.component for event in textrl.events if event.step == 1 and event.phase == "move"] == ["key", "actor", "train_selector"]
     samples = [event for event in textrl.events if event.phase == "learn" and event.component == "actor"]
     assert samples and {value.source.kind for event in samples for value in event.inputs if value.source is not None} <= {"critic", "outcome"}
-    # tables are not a textual memory: no memory view
-    assert textrl.memories == ()
+    # the tables as the game started (empty before the first game), every key of the game's moves read at its steps
+    actor, critic = textrl.memories
+    assert (actor.memory, critic.memory) == ("actor", "critic") and all(entry.text == "" and entry.read_at for entry in actor.entries)
+
+    # a later game starts from the tables the earlier games filled: Q per action with its updates for the actor, V and Q for the critic
+    later = load_game(next(folder.rglob(f"train*/**/game_{GAMES}.json")), harness.op.registry)
+    [textrl] = [player for player in later.players.values() if player.key == "textrl"]
+    actor, critic = textrl.memories
+    filled = [entry for entry in actor.entries if entry.values]
+    assert filled and all(set(entry.values) == set(entry.actions) and entry.visits == sum(entry.actions.values()) for entry in filled)
+    assert any(entry.values and "V" in entry.values for entry in critic.entries)
+    assert all(entry.written_at == entry.read_at for entry in actor.entries if entry.written_at)

@@ -232,9 +232,44 @@ def _textual(description: dict[str, Any] | None, memory: str) -> bool:
     return config.get("kind") in ("llm_v", "llm_q")
 
 
+def _tabular(description: dict[str, Any] | None, memory: str) -> bool:
+    # whether the component of a memory keeps tables: the tabular actor (Q per key and action), the tabular critic (V per key, Q per key and action)
+    config = ((description or {}).get("params") or {}).get(memory)
+    return isinstance(config, dict) and config.get("kind") == "tabular"
+
+
+def _estimates(table: dict[str, Any]) -> tuple[dict[str, float], dict[str, int]]:
+    # a table's estimates per action ({action: {"value", "count"}}) as their values and their numbers of updates
+    return {action: entry["value"] for action, entry in table.items()}, {action: entry["count"] for action, entry in table.items()}
+
+
+def _table_view(memory: str, before: str, part: dict[str, Any], context: TraceContext, learning: GameLearning | None) -> MemoryView:
+    # a tabular block's tables as the game started: per key its values (V, and Q per action) and updates per action; read at the steps of the key,
+    # written at those whose key the game's update samples (a game learned from alone: a batch's samples are of all its games)
+    if memory == "actor":
+        tables = {key: (*_estimates(table), None) for key, table in part.items()}
+    else:
+        values, action_values = part.get("values") or {}, part.get("action_values") or {}
+        tables = {}
+        for key in dict.fromkeys([*values, *action_values]):
+            actions, counts = _estimates(action_values.get(key, {}))
+            v = values.get(key)
+            tables[key] = ({**({"V": v["value"]} if v else {}), **actions}, counts, v["count"] if v else None)
+    keys = [(step.data or {}).get("key") for step in context.steps]
+    samples = ((learning.writes or {}).get(memory) or {}).get("samples", []) if learning is not None and learning.batch is None else []
+    sampled = {sample["key"] for sample in samples}
+    entries = []
+    for key in dict.fromkeys([*tables, *(key for key in keys if key is not None)]):
+        values, counts, visits = tables.get(key, ({}, {}, None))
+        read = tuple(number for number, step_key in enumerate(keys, start=1) if step_key == key)
+        written = read if key in sampled else ()
+        entries.append(MemoryEntry(key, "", visits if visits is not None else sum(counts.values()), counts, sum(counts.values()), read, written, None, values))
+    return MemoryView(memory, before, tuple(entries))
+
+
 def _memories(context: TraceContext, learning: GameLearning | None, written: dict[str, set[tuple[str, int]]]) -> tuple[MemoryView, ...]:
-    # each textual memory as the game started from it, every entry with the steps that read it and the steps of this game whose lessons were written
-    # into it (written, from the learning events)
+    # each memory as the game started from it, every entry with the steps that read it and the steps of this game whose lessons were written into it
+    # (written, from the learning events); a tabular block's tables with their values
     before = ((context.ending or {}).get("state") or {}).get("before")
     state = read_json(context.resolve(before) / STATE_FILE) if before else None
     if not isinstance(state, dict):
@@ -250,7 +285,10 @@ def _memories(context: TraceContext, learning: GameLearning | None, written: dic
     views = []
     for memory in MEMORIES:
         entries = state.get(memory)
-        # only a textual memory has entries to show (a tabular one holds tables), and the description says which component keeps one
+        if _tabular(context.description, memory) and isinstance(entries, dict):
+            views.append(_table_view(memory, before, entries, context, learning))
+            continue
+        # a textual memory has entries of text, and the description says which component keeps one
         if not _textual(context.description, memory) or not isinstance(entries, dict):
             continue
         steps_written: dict[str, tuple[int, ...]] = {}
