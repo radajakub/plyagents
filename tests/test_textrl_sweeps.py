@@ -57,7 +57,7 @@ def _losses() -> Losses:
 
 
 def _checked(note: str) -> str:
-    return json.dumps({"reason": "r", "note": note})
+    return json.dumps({"error": "too_low", "estimate": 0.5, "reason": "r", "note": note})
 
 
 def _judged(lesson: str) -> str:

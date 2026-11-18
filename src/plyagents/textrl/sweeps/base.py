@@ -16,9 +16,9 @@ from plyagents.textrl.utils.calls import Calls
 
 def merge(joint: Given, actor: Given, critic: Given) -> Given:
     # the verdict of every step for both blocks: the grade and lesson from the joint loss or the actor's, the critic note from the joint loss or the
-    # critic's, the reason from the first that gives one; the record of the joint loss (its dropped answers and inputs) stays as it was
+    # critic's, its error and estimate from the critic's, the reason from the first that gives one; the record of the joint loss (its dropped answers and inputs) stays as it was
     verdicts = [
-        StepFeedback(both.grade or own.grade, both.reason or own.reason or note.reason, both.lesson or own.lesson, both.critic_note or note.critic_note)
+        StepFeedback(both.grade or own.grade, both.reason or own.reason or note.reason, both.lesson or own.lesson, both.critic_note or note.critic_note, note.error, note.estimate)
         for both, own, note in zip(joint.verdicts, actor.verdicts, critic.verdicts)
     ]
     return Given(verdicts, joint.dropped, joint.inputs)

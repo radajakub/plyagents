@@ -5,7 +5,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
 
 from plyagents.textrl.model.assessment import Assessment
-from plyagents.textrl.model.counts import KeyCounts
+from plyagents.textrl.model.counts import KeyCounts, MoveCounts
 from plyagents.textrl.model.step import TextRLStep
 from plyagents.textrl.targets.outcome import discounted
 
@@ -36,15 +36,16 @@ class ShownInputs:
         return set() if self.inputs == NO_INPUTS else set(self.inputs.split("+"))
 
 
+def results_text(counts: MoveCounts) -> str:
+    # "3 games (2 loss, 1 win)"
+    return f"{counts.visits} games ({', '.join(f'{count} {name}' for name, count in Counter(counts.results).most_common())})"
+
+
 def history_text(counts: KeyCounts) -> str | None:
     # "<door:1> in 3 games (2 loss, 1 win); <door:2> in 1 games (1 win)", the moves in the order first played; None when the key was never seen
     if not counts:
         return None
-    parts = (
-        f"{move} in {move_counts.visits} games ({', '.join(f'{count} {name}' for name, count in Counter(move_counts.results).most_common())})"
-        for move, move_counts in counts.items()
-    )
-    return "; ".join(parts)
+    return "; ".join(f"{move} in {results_text(move_counts)}" for move, move_counts in counts.items())
 
 
 def history_block(history: Mapping[str, KeyCounts], keys: list[str]) -> str:

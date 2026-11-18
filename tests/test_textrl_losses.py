@@ -54,7 +54,7 @@ def _judged(grade: str = "good", lesson: str | None = "keep it") -> str:
 
 
 def _checked(note: str | None = "worth less") -> str:
-    return json.dumps({"reason": "too high", "note": note})
+    return json.dumps({"error": "too_high", "estimate": -0.2, "reason": "too high", "note": note})
 
 
 def test_the_own_losses_are_named_only_when_used_and_round_trip():
@@ -138,7 +138,12 @@ def test_the_critic_loss_checks_against_the_critics_next_assessment_and_after_th
     assert "The critic's assessment of the move played: wins" in first and "loses" not in first.split("The next situation")[0]
     assert "The next situation the agent moved in:\nsituation two\nThe critic's assessment of its next move, <b>: loses" in first and "Outcome" not in first
     assert "After this move the game ended. Outcome for the agent: -1" in last and "at most 80 characters" in last
-    assert given.verdicts == [StepFeedback(reason="too high", critic_note="worth less"), StepFeedback(reason="too high")]
+    # the target is one sample: the answer is the sign of the error and a corrected estimate, never the target taken as the value
+    assert "The target is one sample of the worth: correct the estimate by a step towards it, not onto it." in first and "too high, too low or right" in first
+    assert given.verdicts == [
+        StepFeedback(reason="too high", critic_note="worth less", error="too_high", estimate=-0.2),
+        StepFeedback(reason="too high", error="too_high", estimate=-0.2),
+    ]
     assert given.inputs == {"shown": [], "target": "critic", "checked": [1, 2]}
 
 
@@ -163,13 +168,36 @@ def test_with_the_history_the_critic_loss_is_shown_the_earlier_games_of_the_situ
     assert "Earlier games in this situation: none." in last
     assert given.inputs["shown"] == ["history"] and given.inputs["history"] == [counts_to_dict(history["situation one"]), {}]
 
-    calls, _, recorded = stub_calls([json.dumps({"checks": [{"step": 1, "reason": "r"}]})])
+    calls, _, recorded = stub_calls([json.dumps({"checks": [{"step": 1, "error": "right", "estimate": 0.0, "reason": "r"}]})])
     asyncio.run(LLMCriticLoss(MODEL, None, {"history", "trajectory"}, TargetType.MC).give(steps, [_q("wins", "loses"), _q("draws", "loses")], 1.0, history, calls))
     # the whole game: one block of the earlier games per step, after the steps
     prompt = recorded[0].prompt_message
     assert "Step 1: <a> in 3 games (2 win, 1 loss); <b> in 1 games (1 loss).\nStep 2: no earlier games in this situation." in prompt
     assert prompt.index("Step 2:\nsituation two") < prompt.index("What the agent's earlier games showed") < prompt.index("Outcome for the agent")
     assert LLMCriticLossParams.from_string("inputs=history+outcome").inputs == "outcome+history"
+
+
+def test_the_record_target_checks_against_the_mean_outcome_of_the_move_in_the_earlier_games_and_this_one(stub_calls):
+    history = {"situation one": {"<a>": MoveCounts({"win": 2, "loss": 1}, 1.0, 3.0), "<b>": MoveCounts({"loss": 1}, -1.0, 1.0)}}
+    steps = [TextRLStep("situation one", "<a>", 0, "s1", legal=("<a>", "<b>"))]
+    calls, _, recorded = stub_calls([_checked()])
+    given = asyncio.run(LLMCriticLoss(MODEL, None, set(), TargetType.RECORD).give(steps, [_q("wins", "loses")], -1.0, history, calls))
+    prompt = recorded[0].prompt_message
+    # the move's record with this game: 2 wins and 2 losses, mean 0; the other move's games are not its record
+    assert "After this move the game ended. Outcome for the agent: -1" in prompt
+    assert "The record of the move played here, this game included: 4 games (2 win, 2 loss), mean outcome +0.00." in prompt
+    assert "The record's mean outcome is the best estimate of the worth" in prompt and "is one sample of that worth" in recorded[0].system_message
+    assert given.inputs["target"] == "record" and given.inputs["history"] == [counts_to_dict(history["situation one"])]
+
+    # the whole game: the record under each step; a V critic's record is every move of the situation
+    calls, _, recorded = stub_calls([json.dumps({"checks": [{"step": 1, "error": "too_high", "estimate": -0.6, "reason": "r"}]})])
+    situation = Assessment(None, "about even")
+    asyncio.run(LLMCriticLoss(MODEL, None, {"trajectory"}, TargetType.RECORD).give(steps, [situation], -1.0, history, calls))
+    assert "The record of the situation here, this game included: 5 games (3 loss, 2 win), mean outcome -0.20." in recorded[0].prompt_message
+    assert "compared with the record of its step" in recorded[0].prompt_message
+    assert LLMCriticLossParams.from_string("target=record").target is TargetType.RECORD
+    with pytest.raises(ValueError, match="gamma=1"):
+        LLMCriticLoss(MODEL, None, set(), TargetType.RECORD, 0.9)
 
 
 def test_the_oracle_losses_split_the_oracle_verdict(tic_tac_toe, calls):

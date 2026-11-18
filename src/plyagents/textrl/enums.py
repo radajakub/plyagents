@@ -29,6 +29,8 @@ class SelectorType(ExtendedEnum):
 class TargetType(ExtendedEnum):
     MC = "mc"
     CRITIC = "critic"
+    # the llm critic loss only: the mean outcome of the move's record (the earlier games and this one), the sample average
+    RECORD = "record"
 
 
 class SchedulerType(ExtendedEnum):

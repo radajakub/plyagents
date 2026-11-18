@@ -75,7 +75,7 @@ class CriticLoss(Loss):
     # the critic's own loss F_Q (or F_V): per step a reason and a critic note for the critic's memory, from the critic's assessment and its target;
     # no grade and no lesson. Configured by the TextRL option `critic_loss`, beside an actor_loss and instead of the joint `feedback`
     def part(self, verdict: StepFeedback) -> StepFeedback:
-        return StepFeedback(reason=verdict.reason, critic_note=verdict.critic_note)
+        return StepFeedback(reason=verdict.reason, critic_note=verdict.critic_note, error=verdict.error, estimate=verdict.estimate)
 
 
 @dataclass(frozen=True)

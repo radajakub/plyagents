@@ -6,6 +6,8 @@ from typing import Any, Literal
 # the grades of a move, worst first
 type Grade = Literal["mistake", "dubious", "neutral", "good", "strong"]
 GRADES: tuple[Grade, ...] = ("mistake", "dubious", "neutral", "good", "strong")
+# the critic loss's sign of the critic's error against its target
+type Error = Literal["too_high", "too_low", "right"]
 # the learning blocks of the TextRL: each takes its own text of a verdict as its gradient
 type BlockKind = Literal["actor", "critic"]
 
@@ -18,6 +20,9 @@ class StepFeedback:
     reason: str = ""
     lesson: str | None = None
     critic_note: str | None = None
+    # the critic loss's check of the critic's assessment: the sign of its error and the corrected estimate in [-1, 1]; None when not given
+    error: Error | None = None
+    estimate: float | None = None
 
     def gradient(self, block: BlockKind) -> str | None:
         # the text the loss wrote for a block: the actor's lesson, the critic's note; None is a zero gradient
@@ -31,4 +36,4 @@ class StepFeedback:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> StepFeedback:
-        return cls(data.get("grade"), data.get("reason", ""), data.get("lesson"), data.get("critic_note"))
+        return cls(data.get("grade"), data.get("reason", ""), data.get("lesson"), data.get("critic_note"), data.get("error"), data.get("estimate"))
