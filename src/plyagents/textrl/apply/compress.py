@@ -13,24 +13,19 @@ from plyagents.textrl.model.memory import MemoryWrite
 from plyagents.textrl.utils.calls import Calls
 from plyagents.textrl.utils.options import read_options
 
+# no hint on how to shorten or combine (keep every point, counts, no merging): the model finds its own form within the share (decided 2026-11-18)
 SYSTEM = "You shorten the notes an agent keeps about one situation in a game. Answer with the shortened notes only."
-PROMPT = """Shorten these notes to at most {keep} characters. Keep every point and shorten each in proportion; keep any count of the lessons that support a point \
-as it is written; do not add, merge or reinterpret anything.
+PROMPT = """Shorten these notes to at most {keep} characters.
 
 Notes:
 {notes}"""
-# reduce=mean: the lessons of one key in a batch combined into one, with the old entry shortened in the same call when it must be. The mean in text: each
-# point with the number of lessons that support it, so 3 against 1 is not written as 2 against 2 (the same instruction for every game: part of Apply)
+# reduce=mean: the lessons of one key in a batch combined into one, with the old entry shortened in the same call when it must be
 SYSTEM_REDUCE = "You keep the notes an agent has about one situation in a game, and combine new lessons about it into one."
-COMBINE = """Combine these {count} lessons about the same situation into one text{limit}. Keep every point they make and state how many of the {count} lessons \
-support it ("k of {count} lessons: ..."); where they disagree, give each side with its count. Add nothing they do not say. Answer with the combined text only.
+COMBINE = """Combine these {count} lessons about the same situation into one text{limit}. Answer with the combined text only.
 
 Lessons:
 {lessons}"""
-COMBINE_AND_SHORTEN = """First shorten the notes to at most {keep} characters: keep every point and shorten each in proportion; keep any count of the lessons \
-that support a point as it is written; do not add, merge or reinterpret anything. Then combine the {count} new lessons about the same situation into one \
-text{limit}: keep every point they make and state how many of the {count} lessons support it ("k of {count} lessons: ..."); where they disagree, give each side \
-with its count. Add nothing they do not say.
+COMBINE_AND_SHORTEN = """First shorten the notes to at most {keep} characters. Then combine the {count} new lessons about the same situation into one text{limit}.
 
 Notes:
 {notes}

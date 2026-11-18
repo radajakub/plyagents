@@ -177,6 +177,24 @@ def test_with_the_history_the_critic_loss_is_shown_the_earlier_games_of_the_situ
     assert LLMCriticLossParams.from_string("inputs=history+outcome").inputs == "outcome+history"
 
 
+def test_without_a_critic_the_actor_loss_does_not_mention_one(stub_calls):
+    # critic=none: every assessment is empty, so the moves are judged by how the game went (and the earlier games, with history), not by a critic
+    steps = [TextRLStep("situation one", "<a>", 0, "s1", legal=("<a>", "<b>"))]
+    calls, _, recorded = stub_calls([_judged()])
+    asyncio.run(LLMActorLoss(MODEL, None, {"outcome", "history"}).give(steps, [Assessment(None, "")], 1.0, {}, calls))
+    system, prompt = recorded[0].system_message, recorded[0].prompt_message
+    assert "by how the game went and by the agent's earlier games in the same situations." in system and "critic" not in system + prompt
+    calls, _, recorded = stub_calls([json.dumps({"verdicts": [{"step": 1, "grade": "good", "reason": "r", "lesson": None}]})])
+    asyncio.run(LLMActorLoss(MODEL, None, {"outcome", "trajectory"}).give(steps, [Assessment(None, "")], 1.0, {}, calls))
+    system, prompt = recorded[0].system_message, recorded[0].prompt_message
+    assert "by how the game went." in system and "Each shows the situation as the agent saw it and the move it played." in prompt
+    assert "critic" not in system + prompt
+    # with a critic the wording is as before
+    calls, _, recorded = stub_calls([_judged()])
+    asyncio.run(LLMActorLoss(MODEL, None, set()).give(steps, [_q("wins", "loses")], 1.0, {}, calls))
+    assert "by what a critic says of them." in recorded[0].system_message
+
+
 def test_the_record_target_checks_against_the_mean_outcome_of_the_move_in_the_earlier_games_and_this_one(stub_calls):
     history = {"situation one": {"<a>": MoveCounts({"win": 2, "loss": 1}, 1.0, 3.0), "<b>": MoveCounts({"loss": 1}, -1.0, 1.0)}}
     steps = [TextRLStep("situation one", "<a>", 0, "s1", legal=("<a>", "<b>"))]

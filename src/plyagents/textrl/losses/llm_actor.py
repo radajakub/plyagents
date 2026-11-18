@@ -35,17 +35,18 @@ from plyagents.textrl.model.step import TextRLStep
 from plyagents.textrl.utils.calls import Calls
 from plyagents.textrl.utils.options import read_options
 
-SYSTEM = (
-    "You judge the moves an agent played in a game, by what a critic says of them. Your lessons are added to the agent's notes for the situation"
-    " they are about, and the agent reads them the next time it is in that situation."
-)
+NOTES = " Your lessons are added to the agent's notes for the situation they are about, and the agent reads them the next time it is in that situation."
+SYSTEM = "You judge the moves an agent played in a game, by what a critic says of them." + NOTES
+# without a critic (critic=none: every assessment empty), the moves are judged by how the game went, and with `history` also by the earlier games
+SYSTEM_ALONE = "You judge the moves an agent played in a game, by how the game went{earlier}." + NOTES
+EARLIER = " and by the agent's earlier games in the same situations"
 LESSON = (
     "Where the agent should play differently next time, or keep playing the same, add a lesson: one or two sentences it can act on when it meets"
     " this situation again{limit}.{track}"
 )
 STEP_PROMPT = "{step}\n\nGrade the move ({grades}) and give a short reason. " + LESSON
 GAME_PROMPT = (
-    "The agent's moves in one game, in order. Each shows the situation as the agent saw it, the move it played and what the critic says of it.\n\n"
+    "The agent's moves in one game, in order. Each shows the situation as the agent saw it{shown}.\n\n"
     "{steps}{history}{outcome}\n\nFor every move give its step number, a grade ({grades}) and a short reason. " + LESSON
 )
 # the TD target of the state-value critic after the last move: the game's end, whatever the inputs
@@ -113,6 +114,11 @@ class LLMActorLossParams(ShownInputs, ComponentParams):
         )
 
 
+def _criticised(assessments: list[Assessment]) -> bool:
+    # whether a critic said anything of the game; without one (critic=none) every assessment is empty
+    return any(assessment.text for assessment in assessments)
+
+
 class LLMActorLoss(LLMLoss, ActorLoss):
     # F_pi: grades every move by the critic's assessment. The Q critic's text assesses every legal move, so the step is judged against its alternatives
     # (SAC); the state-value critic's is compared with its assessment of the next situation the agent moved in, or with the outcome after the last
@@ -129,6 +135,9 @@ class LLMActorLoss(LLMLoss, ActorLoss):
 
     def asked(self, step: TextRLStep, assessment: Assessment, whole_game: bool) -> bool:
         return whole_game or step.action is not None
+
+    def system_prompt(self, assessments: list[Assessment]) -> str:
+        return SYSTEM if _criticised(assessments) else SYSTEM_ALONE.format(earlier=EARLIER if "history" in self.inputs else "")
 
     def _critic(
         self, index: int, steps: list[TextRLStep], assessments: list[Assessment], outcome: float, alone: bool, corrections: list[str | None], shown: list[int] | None
@@ -198,6 +207,7 @@ class LLMActorLoss(LLMLoss, ActorLoss):
     def game_prompt(self, steps: list[TextRLStep], assessments: list[Assessment], outcome: float, history: Mapping[str, KeyCounts]) -> str:
         shown = "\n\n".join(self._step(index, steps, assessments, outcome, history, False, []) for index in range(len(steps)))
         return GAME_PROMPT.format(
+            shown=", the move it played and what the critic says of it" if _criticised(assessments) else " and the move it played",
             steps=shown,
             history=history_block(history, [step.key for step in steps]) if "history" in self.inputs else "",
             outcome=f"\n\n{outcome_line(outcome)}{discount_line(self.gamma)}" if "outcome" in self.inputs else "",

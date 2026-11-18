@@ -11,17 +11,14 @@ from plyagents.textrl.utils.calls import Calls
 from plyagents.textrl.utils.options import read_options
 
 SYSTEM = "You keep the notes an agent has about one situation in a game, and rewrite them with new lessons. Answer with the new notes only."
-PROMPT = """Rewrite these notes so that they take in the new {lessons_word}. Change about {percent}% of the notes and keep the rest as it is{limit}; the notes may \
-take any form that helps the agent, for example counts, cases or rules. Keep any count of the lessons that support a point unless the new {lessons_word} \
-change it.{support}
+# no hint on the form of the notes (counts, rules, how to merge): the model finds its own representation within the budget (decided 2026-11-18)
+PROMPT = """Rewrite these notes so that they take in the new {lessons_word}. Change about {percent}% of the notes and keep the rest as it is{limit}.
 
 Notes:
 {notes}
 
 New {lessons_word}:
 {lessons}"""
-# with several new lessons, their mean in text: each point with the number of lessons that support it (as compress[reduce=mean] combines them)
-SUPPORT = ' State how many of the {count} new lessons support each point ("k of {count} lessons: ..."); where they disagree, give each side with its count.'
 
 
 @dataclass(frozen=True, eq=True)
@@ -55,7 +52,6 @@ class RewriteApply(Apply):
                 lessons_word="lessons" if len(parts) > 1 else "lesson",
                 percent=round(100 * alpha),
                 limit=f", in at most {budget} characters" if budget is not None else "",
-                support=SUPPORT.format(count=len(parts)) if len(parts) > 1 else "",
                 notes=old or "(none yet)",
                 lessons="\n".join(f"{number}. {part}" for number, part in enumerate(parts, start=1)),
             )

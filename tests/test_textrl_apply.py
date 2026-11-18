@@ -163,24 +163,18 @@ def test_the_collection_builds_rewrite_and_compress_with_the_mean(services):
         APPLIES.build(APPLIES.config("rewrite"), services)
 
 
-def test_the_mean_of_several_gradients_states_how_many_support_each_point_and_a_shortening_keeps_the_counts(stub_calls):
-    # 3 against 1 must not read as 2 against 2: the combine, the combine with shortening and the rewrite of several gradients ask for the support of each
-    # point; a shortening keeps a count as written
+def test_no_apply_hints_at_the_form_of_the_notes(stub_calls):
+    # the combine, the combine with shortening, the shortening and the rewrite give the lessons and the limit only: no counts of support, no rule to keep
+    # every point or not to merge; the model finds its own form
     lessons = [("z", "switch"), ("z", "switch"), ("z", "switch"), ("z", "stay")]
-    calls, _, recorded = stub_calls(["switch (3 of 4 lessons); stay (1 of 4 lessons)"])
+    calls, _, recorded = stub_calls(["switch, mostly"])
     _write(CompressApply(MODEL, ReduceType.MEAN), KeyedMemory({"z": Entry("short")}), lessons, calls)
     calls, _, combined = stub_calls([json.dumps({"kept": "kept", "combined": "c"})])
     _write(CompressApply(MODEL, ReduceType.MEAN), KeyedMemory({"z": Entry("x" * 40)}), lessons, calls)
-    calls, _, rewritten = stub_calls(["new notes"])
-    _write(RewriteApply(MODEL), KeyedMemory({"z": Entry("old")}), lessons, calls)
-    for prompt in (recorded[0].prompt_message, combined[0].prompt_message, rewritten[0].prompt_message):
-        assert "how many of the 4" in prompt and '"k of 4 lessons: ..."' in prompt and "each side with its count" in prompt
-    assert "uncertain" not in recorded[0].prompt_message + combined[0].prompt_message
-    assert "keep any count of the lessons that support a point as it is written" in combined[0].prompt_message
     calls, _, shortened = stub_calls(["kept"])
     _write(CompressApply(MODEL), KeyedMemory({"z": Entry("x" * 40)}), [("z", "one")], calls)
-    assert "keep any count of the lessons that support a point as it is written" in shortened[0].prompt_message
-    # one gradient has no support to state
-    calls, _, single = stub_calls(["new notes"])
-    _write(RewriteApply(MODEL), KeyedMemory({"z": Entry("old")}), [("z", "switch")], calls)
-    assert "how many of the" not in single[0].prompt_message
+    calls, _, rewritten = stub_calls(["new notes"])
+    _write(RewriteApply(MODEL), KeyedMemory({"z": Entry("old")}), lessons, calls)
+    for prompt in (recorded[0].prompt_message, combined[0].prompt_message, shortened[0].prompt_message, rewritten[0].prompt_message):
+        assert "how many" not in prompt and "count" not in prompt and "every point" not in prompt and "merge" not in prompt and "form" not in prompt
+    assert "1. switch" in recorded[0].prompt_message and "Notes:\nxxxx" in combined[0].prompt_message and "at most" in shortened[0].prompt_message

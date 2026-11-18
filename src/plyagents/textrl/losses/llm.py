@@ -38,6 +38,10 @@ class LLMLoss(Loss):
     def asked(self, step: TextRLStep, assessment: Assessment, whole_game: bool) -> bool:
         return True
 
+    def system_prompt(self, assessments: list[Assessment]) -> str:
+        # the system prompt of the loss's calls, before the rules; a loss may word it by what the critic gives
+        return self.system
+
     @abstractmethod
     def game_prompt(self, steps: list[TextRLStep], assessments: list[Assessment], outcome: float, history: Mapping[str, KeyCounts]) -> str:
         raise NotImplementedError
@@ -68,7 +72,7 @@ class LLMLoss(Loss):
             verdicts = await asyncio.gather(*(self.judge_step(index, steps, assessments, outcome, history, [], calls) for index in range(len(steps))))
             return Given(list(verdicts), [], self.inputs_record(steps, assessments, outcome, history))
         prompt = self.game_prompt(steps, assessments, outcome, history)
-        found, dropped = await self.ask_game(with_rules(self.system, steps), prompt, calls, {"steps": list(range(1, len(steps) + 1))}, len(steps))
+        found, dropped = await self.ask_game(with_rules(self.system_prompt(assessments), steps), prompt, calls, {"steps": list(range(1, len(steps) + 1))}, len(steps))
         verdicts = [
             found.get(number, StepFeedback()) if self.asked(step, assessment, True) else StepFeedback()
             for number, (step, assessment) in enumerate(zip(steps, assessments), start=1)
@@ -83,7 +87,7 @@ class LLMLoss(Loss):
         # the call names the steps whose corrections its prompt showed (the backward sweep), so the record says which verdicts it read
         shown: list[int] = []
         prompt = self.step_prompt(index, steps, assessments, outcome, history, corrections, shown)
-        return await self.ask_step(with_rules(self.system, steps), prompt, calls, {"steps": [index + 1], **({"notes": shown} if shown else {})})
+        return await self.ask_step(with_rules(self.system_prompt(assessments), steps), prompt, calls, {"steps": [index + 1], **({"notes": shown} if shown else {})})
 
     def inputs_record(self, steps: list[TextRLStep], assessments: list[Assessment], outcome: float, history: Mapping[str, KeyCounts]) -> dict[str, Any]:
         # what the prompt showed besides the moves and the outcome, by part: the inputs named, the critic's change per step, the earlier games per step
