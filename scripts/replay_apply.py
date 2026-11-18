@@ -5,8 +5,9 @@ whether a fact changes), without training again.
 A run is a replicate folder of a training result (replicate_<n>, with epoch_<k>/learner/game_<g>/update.json). Every write of the chosen block
 (actor or critic) is taken in the order of the epochs and games, and written with the recorded step alpha, unless --alpha sets one. Each run's
 writes are saved in <out>/<run>.json after every write (the gradients, the entry before and after, the realised step, the call, and the
-reference beside it: the counts of the game's key before it, the move, the outcome and Q*), and a run continues from the writes saved, so a stopped
-run continues. A plyservice scripts job: --check --json prints the plan; at the end, per run, the entry at a few points is printed with the counts.
+reference beside it: the counts of the game's key before it, the move, the outcome and Q*), with the replay's settings (config) and, per session that
+added writes, its provenance (package versions and commits, the command). A run continues from the writes saved, so a stopped run continues; a file
+made with other settings is not continued. A plyservice scripts job: --check --json prints the plan; at the end, per run, the entry at a few points is printed with the counts.
 
 Examples:
     uv run python scripts/replay_apply.py --results results/training/tac_bandit_two_arm --players preset-tac --apply "rewrite[model=gemini:...]" \
@@ -26,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from plybench.cli.shared import build_op
+from plybench.common.provenance import provenance
 from plybench.trackers.llm_call import LLMCall
 from plybench.utils.seed import derive_seed
 
@@ -78,10 +80,17 @@ def recorded_writes(run: Path, block: str) -> list[Write]:
     return writes
 
 
-async def replay(apply: Apply, run: str, writes: list[Write], budget: int | None, alpha: float | None, out: Path, seed: int, llm: Any) -> None:
-    # the writes one after another into an empty memory; saved after each, and continued from what is saved
+async def replay(apply: Apply, run: str, writes: list[Write], config: dict[str, Any], out: Path, llm: Any) -> None:
+    # the writes one after another into an empty memory; saved after each, and continued from what is saved when it was made with the same settings
     path = out / f"{run}.json"
-    done: list[dict[str, Any]] = json.loads(path.read_text())["writes"] if path.exists() else []
+    saved_file: dict[str, Any] = json.loads(path.read_text()) if path.exists() else {"run": run, "config": config, "sessions": [], "writes": []}
+    done: list[dict[str, Any]] = saved_file["writes"]
+    if saved_file.get("config") != config:
+        raise SystemExit(f"{path} was made with other settings ({saved_file.get('config')}), not {config}; use another --out")
+    if len(done) >= len(writes):
+        return
+    saved_file["sessions"].append(provenance(["plyagents"]))
+    budget, alpha, seed = config["budget"], config["alpha"], config["seed"]
     entries: dict[str, str] = {}
     for saved in done:
         entries[saved["key"]] = saved["new"]
@@ -96,7 +105,7 @@ async def replay(apply: Apply, run: str, writes: list[Write], budget: int | None
         done.append(
             {**asdict(write), "old": old, "new": written.new, "alpha": step, "changed": written.changed, "cut": written.cut, "calls": [call.to_dict() for call in recorded]}
         )
-        path.write_text(json.dumps({"run": run, "budget": budget, "writes": done}, indent=1))
+        path.write_text(json.dumps(saved_file, indent=1))
         print(f"progress: {run} {index + 1}/{len(writes)}", flush=True)
 
 
@@ -158,7 +167,8 @@ async def main() -> None:
 
     args.out.mkdir(parents=True, exist_ok=True)
     print(f"{len(runs)} runs, {left} of {planned} writes to replay with {apply.describe()}, budget {args.budget}", flush=True)
-    await asyncio.gather(*(replay(apply, name, writes, args.budget, args.alpha, args.out, args.seed, op.llm) for name, writes in runs.items()))
+    config = {"results": str(args.results), "players": args.players, "block": args.block, "apply": args.apply, "budget": args.budget, "alpha": args.alpha, "seed": args.seed}
+    await asyncio.gather(*(replay(apply, name, writes, config, args.out, op.llm) for name, writes in runs.items()))
     for name in runs:
         summary(args.out, name)
 
