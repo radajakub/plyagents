@@ -23,6 +23,7 @@ from plyagents.textrl.losses.llm_actor import LLMActorLoss, LLMActorLossParams
 from plyagents.textrl.losses.llm_critic import LLMCriticLoss, LLMCriticLossParams
 from plyagents.textrl.losses.oracle import OracleActorLoss, OracleCriticLoss, OracleJointLoss
 from plyagents.textrl.model.assessment import Assessment
+from plyagents.textrl.model.counts import MoveCounts, counts_to_dict
 from plyagents.textrl.model.feedback import StepFeedback
 from plyagents.textrl.model.flow import Given
 from plyagents.textrl.model.step import TextRLStep
@@ -149,6 +150,26 @@ def test_the_monte_carlo_critic_loss_checks_every_step_against_the_outcome_and_s
     assert len(recorded) == 1 and given.inputs["checked"] == [1]
     assert "The game ended later. Outcome for the agent: +1" in recorded[0].prompt_message and "situation two" not in recorded[0].prompt_message
     assert given.verdicts[1:] == [StepFeedback(), StepFeedback()]
+
+
+def test_with_the_history_the_critic_loss_is_shown_the_earlier_games_of_the_situation(stub_calls):
+    history = {"situation one": {"<a>": MoveCounts({"win": 2, "loss": 1}, 1.0, 3.0), "<b>": MoveCounts({"loss": 1}, -1.0, 1.0)}}
+    steps = [TextRLStep("situation one", "<a>", 0, "s1", legal=("<a>", "<b>")), TextRLStep("situation two", "<b>", 0, "s2", legal=("<a>", "<b>"))]
+    calls, _, recorded = stub_calls([_checked(), _checked()])
+    given = asyncio.run(LLMCriticLoss(MODEL, None, {"history"}, TargetType.MC).give(steps, [_q("wins", "loses"), _q("draws", "loses")], 1.0, history, calls))
+    first, last = recorded[0].prompt_message, recorded[1].prompt_message
+    # each step alone: the earlier games of its own situation, every move with its results; a situation never seen says so
+    assert "Earlier games in this situation: <a> in 3 games (2 win, 1 loss); <b> in 1 games (1 loss)." in first
+    assert "Earlier games in this situation: none." in last
+    assert given.inputs["shown"] == ["history"] and given.inputs["history"] == [counts_to_dict(history["situation one"]), {}]
+
+    calls, _, recorded = stub_calls([json.dumps({"checks": [{"step": 1, "reason": "r"}]})])
+    asyncio.run(LLMCriticLoss(MODEL, None, {"history", "trajectory"}, TargetType.MC).give(steps, [_q("wins", "loses"), _q("draws", "loses")], 1.0, history, calls))
+    # the whole game: one block of the earlier games per step, after the steps
+    prompt = recorded[0].prompt_message
+    assert "Step 1: <a> in 3 games (2 win, 1 loss); <b> in 1 games (1 loss).\nStep 2: no earlier games in this situation." in prompt
+    assert prompt.index("Step 2:\nsituation two") < prompt.index("What the agent's earlier games showed") < prompt.index("Outcome for the agent")
+    assert LLMCriticLossParams.from_string("inputs=history+outcome").inputs == "outcome+history"
 
 
 def test_the_oracle_losses_split_the_oracle_verdict(tic_tac_toe, calls):

@@ -10,10 +10,22 @@ from plyagents.textrl.configs.components import ComponentParams
 from plyagents.textrl.configs.model import ModelSpec
 from plyagents.textrl.enums import TargetType
 from plyagents.textrl.losses.base import CriticLoss
-from plyagents.textrl.losses.inputs import CHECKED, NO_INPUTS, ShownInputs, by_step, discount_line, next_discount, outcome_line, parse_inputs, return_line
+from plyagents.textrl.losses.inputs import (
+    CHECKED,
+    NO_INPUTS,
+    ShownInputs,
+    by_step,
+    discount_line,
+    history_block,
+    history_text,
+    next_discount,
+    outcome_line,
+    parse_inputs,
+    return_line,
+)
 from plyagents.textrl.losses.llm import LLMLoss
 from plyagents.textrl.model.assessment import Assessment
-from plyagents.textrl.model.counts import KeyCounts
+from plyagents.textrl.model.counts import KeyCounts, counts_to_dict
 from plyagents.textrl.model.feedback import StepFeedback
 from plyagents.textrl.model.step import TextRLStep
 from plyagents.textrl.utils.calls import Calls
@@ -27,7 +39,7 @@ NOTE = "Where it was wrong, add a critic note: what {worth} was really worth her
 STEP_PROMPT = "{step}\n\n{target}\n\nWas the critic's assessment right? Compare it with what followed and give a short reason. " + NOTE
 GAME_PROMPT = (
     "A critic's assessments in one game an agent played, in order. Each step shows the situation as the agent saw it, the move it played and the"
-    " critic's assessment of {assessed}.\n\n{steps}\n\n{outcome}\n\nFor every step give its step number and a short reason: was the critic's"
+    " critic's assessment of {assessed}.\n\n{steps}{history}\n\n{outcome}\n\nFor every step give its step number and a short reason: was the critic's"
     " assessment right, compared with {compared}? " + NOTE
 )
 ENDED = "After this move the game ended. "
@@ -35,7 +47,8 @@ ENDED = "After this move the game ended. "
 # what F_Q is shown besides the step, the critic's assessment and its target:
 #   outcome     the game's outcome at every step, beside the temporal-difference target
 #   trajectory  the whole game in one call (hindsight); without it every step is checked in its own call, from that step and its target alone
-INPUTS = ("outcome", "trajectory")
+#   history     the moves played in the same situation in all earlier games and their results, so a note can rest on the record, not on one game
+INPUTS = ("outcome", "trajectory", "history")
 
 
 class _Checked(BaseModel):
@@ -108,11 +121,14 @@ class LLMCriticLoss(LLMLoss, CriticLoss):
     def asked(self, step: TextRLStep, assessment: Assessment, whole_game: bool) -> bool:
         return assessed(step, assessment) is not None
 
-    def _step(self, index: int, steps: list[TextRLStep], assessments: list[Assessment], alone: bool) -> str:
+    def _step(self, index: int, steps: list[TextRLStep], assessments: list[Assessment], alone: bool, history: Mapping[str, KeyCounts]) -> str:
         step, assessment = steps[index], assessments[index]
         what = "the move played" if assessment.moves else "the situation"
         head = f"The situation, as the agent saw it:\n{step.key}" if alone else f"Step {index + 1}:\n{step.key}"
-        return f"{head}\nMove: {step.action or 'no valid move'}\nThe critic's assessment of {what}: {assessed(step, assessment) or 'none'}"
+        text = f"{head}\nMove: {step.action or 'no valid move'}\nThe critic's assessment of {what}: {assessed(step, assessment) or 'none'}"
+        if alone and "history" in self.inputs:
+            text += f"\nEarlier games in this situation: {history_text(history.get(step.key, {})) or 'none'}."
+        return text
 
     def _target(self, index: int, steps: list[TextRLStep], assessments: list[Assessment], outcome: float, corrections: list[str | None], shown: list[int] | None = None) -> str:
         # the TD target: the critic's next assessment, with what the check of it found when the sweep checked it first (the backward sweep)
@@ -143,14 +159,15 @@ class LLMCriticLoss(LLMLoss, CriticLoss):
         shown: list[int] | None = None,
     ) -> str:
         target = self._target(index, steps, assessments, outcome, corrections or [], shown)
-        return STEP_PROMPT.format(step=self._step(index, steps, assessments, True), target=target, **self._worth(assessments))
+        return STEP_PROMPT.format(step=self._step(index, steps, assessments, True, history), target=target, **self._worth(assessments))
 
     def game_prompt(self, steps: list[TextRLStep], assessments: list[Assessment], outcome: float, history: Mapping[str, KeyCounts]) -> str:
         moves = any(assessment.moves for assessment in assessments)
         compared = "the outcome" if self.target is TargetType.MC else "the critic's assessment at the next step (the outcome after the last step)"
         return GAME_PROMPT.format(
             assessed="the move played" if moves else "the situation",
-            steps="\n\n".join(self._step(index, steps, assessments, False) for index in range(len(steps))),
+            steps="\n\n".join(self._step(index, steps, assessments, False, history) for index in range(len(steps))),
+            history=history_block(history, [step.key for step in steps]) if "history" in self.inputs else "",
             outcome=outcome_line(outcome) + discount_line(self.gamma),
             compared=compared,
             **self._worth(assessments),
@@ -166,7 +183,10 @@ class LLMCriticLoss(LLMLoss, CriticLoss):
 
     def inputs_record(self, steps: list[TextRLStep], assessments: list[Assessment], outcome: float, history: Mapping[str, KeyCounts]) -> dict[str, Any]:
         checked = [number for number, (step, assessment) in enumerate(zip(steps, assessments), start=1) if self.asked(step, assessment, self.whole_game)]
-        return {"shown": [name for name in INPUTS if name in self.inputs], "target": self.target.value, "checked": checked}
+        inputs: dict[str, Any] = {"shown": [name for name in INPUTS if name in self.inputs], "target": self.target.value, "checked": checked}
+        if "history" in self.inputs:
+            inputs["history"] = [counts_to_dict(history.get(step.key, {})) for step in steps]
+        return inputs
 
     def describe(self) -> str:
         target = "the outcome" if self.target is TargetType.MC else "its own next assessment (the outcome after the last step)"
