@@ -193,6 +193,8 @@ def test_without_a_critic_the_actor_loss_does_not_mention_one(stub_calls):
     calls, _, recorded = stub_calls([_judged()])
     asyncio.run(LLMActorLoss(MODEL, None, set()).give(steps, [_q("wins", "loses")], 1.0, {}, calls))
     assert "by what a critic says of them." in recorded[0].system_message
+    # with a critic or without, the loss names the aim of training: the wins over all the games, not this game's outcome
+    assert recorded[0].system_message.count("its aim is to win as often as possible over all its games, not only this one.") == 1 and "not only this one." in system
 
 
 def test_the_record_target_checks_against_the_mean_outcome_of_the_move_in_the_earlier_games_and_this_one(stub_calls):

@@ -36,9 +36,11 @@ from plyagents.textrl.utils.calls import Calls
 from plyagents.textrl.utils.options import read_options
 
 NOTES = " Your lessons are added to the agent's notes for the situation they are about, and the agent reads them the next time it is in that situation."
-SYSTEM = "You judge the moves an agent played in a game, by what a critic says of them." + NOTES
+# the objective of training, as a loss defines what to improve: the wins over all the games, not this game's outcome; it names no method (decided 2026-11-18)
+GOAL = " The agent learns from experience, so it can expect to meet this situation again; its aim is to win as often as possible over all its games, not only this one."
+SYSTEM = "You judge the moves an agent played in a game, by what a critic says of them." + NOTES + GOAL
 # without a critic (critic=none: every assessment empty), the moves are judged by how the game went, and with `history` also by the earlier games
-SYSTEM_ALONE = "You judge the moves an agent played in a game, by how the game went{earlier}." + NOTES
+SYSTEM_ALONE = "You judge the moves an agent played in a game, by how the game went{earlier}." + NOTES + GOAL
 EARLIER = " and by the agent's earlier games in the same situations"
 LESSON = (
     "Where the agent should play differently next time, or keep playing the same, add a lesson: one or two sentences it can act on when it meets"
