@@ -36,8 +36,8 @@ from plyagents.textrl.selectors.base import Selector
 from plyagents.textrl.utils.calls import Calls
 from plyagents.textrl.utils.options import read_options
 
-# put before the entry in the user message, between the state and the legal moves; no instruction to follow it
-LABEL = "Notes from past experience in this situation:"
+# put before the entry in the user message, between the state and the legal moves; no instruction to follow it. Names earlier games, so the LLM does not read the notes as this game's
+LABEL = "Notes from your earlier games, about this same situation:"
 
 # the exploration instructions (option `explore`), in training only, on a line of their own after the notes, so they do not read as a note; the
 # wording of the exploration experiment, fixed before its runs
