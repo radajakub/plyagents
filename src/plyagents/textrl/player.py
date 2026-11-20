@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 from typing import Any
 
@@ -259,18 +258,17 @@ class TextRLPlayer(LearnablePlayer[TextRLUpdate]):
         if update.reference is not None:
             update.reference.apply_to(self.reference)
 
-    def save_update(self, update: TextRLUpdate, directory: Path) -> None:
-        (directory / UPDATE_FILE).write_text(json.dumps(update.to_dict(), indent=1))
+    def save_update(self, update: TextRLUpdate) -> dict[str, Any]:
+        return {UPDATE_FILE: update.to_dict()}
 
-    def load_update(self, directory: Path) -> TextRLUpdate:
-        return TextRLUpdate.from_dict(json.loads((directory / UPDATE_FILE).read_text()), self.actor.parse_update, self.critic.parse_update)
+    def load_update(self, records: dict[str, Any]) -> TextRLUpdate:
+        return TextRLUpdate.from_dict(records[UPDATE_FILE], self.actor.parse_update, self.critic.parse_update)
 
-    def save_checkpoint(self, checkpoint: Path) -> None:
-        state = {"actor": self.actor.state(), "critic": self.critic.state(), "reference": self.reference.to_dict()}
-        (checkpoint / STATE_FILE).write_text(json.dumps(state, indent=1))
+    def save_checkpoint(self) -> dict[str, Any]:
+        return {STATE_FILE: {"actor": self.actor.state(), "critic": self.critic.state(), "reference": self.reference.to_dict()}}
 
-    def load_checkpoint(self, checkpoint: Path) -> None:
-        state = json.loads((checkpoint / STATE_FILE).read_text())
+    def load_checkpoint(self, records: dict[str, Any]) -> None:
+        state = records[STATE_FILE]
         self.actor.load_state(state["actor"])
         self.critic.load_state(state["critic"])
         self.reference = Reference.from_dict(state["reference"])

@@ -249,17 +249,18 @@ def test_equivalent_configs_play_the_same_games_from_the_same_seeds(tmp_path, mo
     assert len({tuple(game) for game in moves}) > 30
 
 
-def test_the_reference_counts_are_kept_in_the_checkpoint_and_read_back(tmp_path):
+def test_the_reference_counts_are_kept_in_the_checkpoint_and_read_back():
     config = registry.player_config("textrl:actor=tabular,critic=tabular")
     player = registry.build_player(_game(), config, "i")
     assert isinstance(player, TextRLPlayer)
     player.reference.add("z", "<C1R1>", -1.0)
-    player.save_checkpoint(tmp_path)
-    assert json.loads((tmp_path / "state.json").read_text())["reference"] == {"z": {"<C1R1>": {"results": {"loss": 1}, "sum": -1.0, "sum_sq": 1.0}}}
+    # as the store keeps the records and gives them back: JSON
+    records = json.loads(json.dumps(player.save_checkpoint()))
+    assert records["state.json"]["reference"] == {"z": {"<C1R1>": {"results": {"loss": 1}, "sum": -1.0, "sum_sq": 1.0}}}
 
     restored = registry.build_player(_game(), config, "i")
     assert isinstance(restored, TextRLPlayer)
-    restored.load_checkpoint(tmp_path)
+    restored.load_checkpoint(records)
     assert restored.reference.counts == player.reference.counts
 
 
