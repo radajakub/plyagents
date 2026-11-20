@@ -38,13 +38,28 @@ from plyagents.textrl.utils.options import read_options
 NOTES = " Your lessons are added to the agent's notes for the situation they are about, and the agent reads them the next time it is in that situation."
 # the objective of training, as a loss defines what to improve: the wins over all the games, not this game's outcome; it names no method (decided 2026-11-18)
 GOAL = " The agent learns from experience, so it can expect to meet this situation again; its aim is to win as often as possible over all its games, not only this one."
-SYSTEM = "You judge the moves an agent played in a game, by what a critic says of them." + NOTES + GOAL
+# what a move is judged by: its advantage over the other legal moves, not the outcome; the estimand is stated, the arithmetic of an update rule is
+# not (no pi weighting: F gives the direction, Apply the step; decided 2026-11-20)
+ESTIMAND = (
+    " Judge each move against the other legal moves of its situation: a move is better if it leads to better results than they do there."
+    " One game is one sample: a good move can lose and a bad one win by chance."
+)
+# the same estimand from a critic: its assessment of every legal move (SAC), or of the situation before and after the move (the TD error of A2C)
+ESTIMAND_Q = " Judge each move against the other legal moves of its situation: a move is better if the critic rates it higher than them."
+ESTIMAND_V = (
+    " Judge each move by what it changed: a move is good if the situation after it, or the outcome after the agent's last move, is better than the"
+    " critic's assessment of the situation before it."
+)
+# with `history`: how much the earlier games say, so a move never tried is not judged from the prior
+EVIDENCE = " The more earlier games a move has in a situation, the surer the comparison; a move not yet played there has no evidence either way."
+SYSTEM = "You judge the moves an agent played in a game, by what a critic says of them.{estimand}{evidence}" + NOTES + GOAL
 # without a critic (critic=none: every assessment empty), the moves are judged by how the game went, and with `history` also by the earlier games
-SYSTEM_ALONE = "You judge the moves an agent played in a game, by how the game went{earlier}." + NOTES + GOAL
+SYSTEM_ALONE = "You judge the moves an agent played in a game, by how the game went{earlier}.{estimand}{evidence}" + NOTES + GOAL
 EARLIER = " and by the agent's earlier games in the same situations"
+# no lesson is the zero gradient: where no move is better than another, the notes stay as they are
 LESSON = (
     "Where the agent should play differently next time, or keep playing the same, add a lesson: one or two sentences it can act on when it meets"
-    " this situation again{limit}.{track}"
+    " this situation again{limit}.{track} If the evidence favours no move over another here, give no lesson."
 )
 STEP_PROMPT = "{step}\n\nGrade the move ({grades}) and give a short reason. " + LESSON
 GAME_PROMPT = (
@@ -121,6 +136,11 @@ def _criticised(assessments: list[Assessment]) -> bool:
     return any(assessment.text for assessment in assessments)
 
 
+def estimand(moves: bool, values: bool) -> str:
+    # what a move is judged against, by what the loss is shown of a critic: every legal move (moves), the situation before and after (values), or none
+    return ESTIMAND_Q if moves else ESTIMAND_V if values else ESTIMAND
+
+
 class LLMActorLoss(LLMLoss, ActorLoss):
     # F_pi: grades every move by the critic's assessment. The Q critic's text assesses every legal move, so the step is judged against its alternatives
     # (SAC); the state-value critic's is compared with its assessment of the next situation the agent moved in, or with the outcome after the last
@@ -139,7 +159,10 @@ class LLMActorLoss(LLMLoss, ActorLoss):
         return whole_game or step.action is not None
 
     def system_prompt(self, assessments: list[Assessment]) -> str:
-        return SYSTEM if _criticised(assessments) else SYSTEM_ALONE.format(earlier=EARLIER if "history" in self.inputs else "")
+        criticised = _criticised(assessments)
+        moves = "q" in self.inputs or (criticised and any(assessment.moves for assessment in assessments))
+        judged = {"estimand": estimand(moves, criticised or "delta" in self.inputs), "evidence": EVIDENCE if "history" in self.inputs else ""}
+        return SYSTEM.format(**judged) if criticised else SYSTEM_ALONE.format(earlier=EARLIER if "history" in self.inputs else "", **judged)
 
     def _critic(
         self, index: int, steps: list[TextRLStep], assessments: list[Assessment], outcome: float, alone: bool, corrections: list[str | None], shown: list[int] | None

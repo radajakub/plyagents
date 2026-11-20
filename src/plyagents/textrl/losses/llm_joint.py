@@ -12,6 +12,7 @@ from plyagents.textrl.configs.model import ModelSpec
 from plyagents.textrl.losses.base import JointLoss
 from plyagents.textrl.losses.inputs import NO_INPUTS, TRACK, ShownInputs, action_values_line, by_step, delta_line, deltas, discount_line, history_block, parse_inputs
 from plyagents.textrl.losses.llm import LLMLoss
+from plyagents.textrl.losses.llm_actor import EVIDENCE, GOAL, LESSON, NOTES, estimand
 from plyagents.textrl.model.assessment import Assessment
 from plyagents.textrl.model.counts import KeyCounts
 from plyagents.textrl.model.feedback import GRADES, Grade, StepFeedback
@@ -19,17 +20,19 @@ from plyagents.textrl.model.step import TextRLStep
 from plyagents.textrl.utils.calls import Calls
 from plyagents.textrl.utils.options import read_options
 
-SYSTEM = (
-    "You review a game an agent played and judge each of its moves. Your lessons are added to the agent's notes for the situation"
-    " they are about, and the agent reads them the next time it is in that situation."
-)
-PROMPT = """The agent's moves, in order. Each shows the situation as the agent saw it and the move it played{estimates}.
+# the actor loss's estimand, evidence, aim of training and lesson, so the joint ablation differs from it only in being one call (aligned 2026-11-20)
+SYSTEM = "You review a game an agent played and judge each of its moves.{estimand}{evidence}" + NOTES + GOAL
+PROMPT = (
+    """The agent's moves, in order. Each shows the situation as the agent saw it and the move it played{estimates}.
 
 {steps}{history}
 
 Outcome for the agent: {outcome:+g} (+1 is a win, 0 a draw, -1 a loss).{discount}
 
-For every move give its step number, a grade ({grades}) and a short reason. Where the agent should play differently next time, or keep playing the same, add a lesson: one or two sentences it can act on when it meets this situation again{limit}.{track}{critic}"""
+For every move give its step number, a grade ({grades}) and a short reason. """
+    + LESSON
+    + "{critic}"
+)
 CRITIC = " Where the value estimate of a move was wrong, add a critic note: what the position was really worth, and why."
 # with the Q critic, whose text assesses every legal move
 CRITIC_Q = " Where the critic's assessment of the move played was wrong, add a critic note: what that move was really worth here, and why."
@@ -100,6 +103,15 @@ class LLMJointLoss(LLMLoss, JointLoss):
     def whole_game(self) -> bool:
         return True
 
+    def _critic_shown(self, assessments: list[Assessment]) -> tuple[bool, bool]:
+        # whether F is shown a critic's estimates (its text with `value`, or `delta`), and whether they are of every legal move (the Q critic's text)
+        estimated = ("value" in self.inputs and any(assessment.text for assessment in assessments)) or "delta" in self.inputs
+        return estimated, estimated and any(assessment.moves for assessment in assessments)
+
+    def system_prompt(self, assessments: list[Assessment]) -> str:
+        estimated, moves = self._critic_shown(assessments)
+        return SYSTEM.format(estimand=estimand(moves or "q" in self.inputs, estimated), evidence=EVIDENCE if "history" in self.inputs else "")
+
     def _step(self, number: int, step: TextRLStep, assessment: Assessment, delta: tuple[float, float, bool] | None) -> str:
         # one move: the situation, what the actor read and thought, the move, then what the critic says of it
         lines = [f"Step {number}:", step.key]
@@ -124,8 +136,7 @@ class LLMJointLoss(LLMLoss, JointLoss):
         # V(s_t) against gamma V(s_t+1), the next position the agent moves in; after its last move, the outcome (the one reward)
         changes: list[tuple[float, float, bool] | None] = list(deltas(assessments, outcome, self.role, self.gamma)) if "delta" in self.inputs else [None] * len(steps)
         shown = [self._step(number, step, assessment, delta) for number, (step, assessment, delta) in enumerate(zip(steps, assessments, changes), start=1)]
-        estimated = ("value" in self.inputs and any(assessment.text for assessment in assessments)) or "delta" in self.inputs
-        moves = any(assessment.moves for assessment in assessments)
+        estimated, moves = self._critic_shown(assessments)
         return PROMPT.format(
             estimates=(" and the critic's assessment of each legal move" if moves else " and the value estimate of the position") if estimated else "",
             steps="\n\n".join(shown),

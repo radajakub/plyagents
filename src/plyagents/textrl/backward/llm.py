@@ -45,7 +45,8 @@ Feedback on it:
 {feedback}
 
 Write the text to add to {notes}, about {purpose}{limit}. Use what you see of how {who} used its notes{and_reasoning}: where a note was misread, \
-followed too far or is wrong, correct it rather than repeating the feedback. If nothing should change, give no text."""
+followed too far or is wrong, correct it rather than repeating the feedback. Do not judge the step yourself: the feedback says which way to change, \
+your text how to change the notes so that {who} follows it. If nothing should change, give no text."""
 
 
 def _kind(tape: Tape) -> str:
