@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from plybench.common.store import store
 from plybench.player.learnable import LEARNER_CALLS
 
 from plyagents.textrl.player import UPDATE_FILE
@@ -76,14 +76,18 @@ class GameLearning:
 
 
 def read_json(path: Path) -> Any:
-    # a record file, None when it was not written
-    return json.loads(path.read_text()) if path.exists() else None
+    # a record, by its key in plybench's store (the path the run wrote it at); None when it was not written
+    return store().get(path.as_posix())
 
 
 def _batches(learner: Path) -> list[Path]:
-    # the batch folders in the order they were learned: batch_1, batch_2, ..., then the epoch's
-    numbered = sorted((path for path in learner.iterdir() if _BATCH.match(path.name)), key=lambda path: int(path.name.removeprefix("batch_")))
-    return [*numbered, learner / "epoch"]
+    # the batch folders in the order they were learned: batch_1, batch_2, ..., then the epoch's; none when the learner folder holds nothing
+    prefix = learner.as_posix() + "/"
+    folders = {key.removeprefix(prefix).split("/", 1)[0] for key in store().keys(learner.as_posix()) if key.startswith(prefix)}
+    if not folders:
+        return []
+    numbered = sorted((name for name in folders if _BATCH.match(name)), key=lambda name: int(name.removeprefix("batch_")))
+    return [*(learner / name for name in numbered), learner / "epoch"]
 
 
 def game_learning(learner: Path, round_: int) -> GameLearning | None:
@@ -95,7 +99,7 @@ def game_learning(learner: Path, round_: int) -> GameLearning | None:
     if update.get("record") is not None:
         return GameLearning(update["record"], update.get("reference"), read_json(game / LEARNER_CALLS) or [], None, update, None, update)
     # a game of a batch: its own update holds its counts only; its judgement and the writes are in the batch's update
-    for folder in _batches(learner) if learner.is_dir() else []:
+    for folder in _batches(learner):
         batch = read_json(folder / UPDATE_FILE)
         games = ((batch or {}).get("record") or {}).get("games") or []
         entry = next((item for item in games if item.get("round") == round_), None)
