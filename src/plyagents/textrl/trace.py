@@ -271,7 +271,9 @@ def _memories(context: TraceContext, learning: GameLearning | None, written: dic
     # each memory as the game started from it, every entry with the steps that read it and the steps of this game whose lessons were written into it
     # (written, from the learning events); a tabular block's tables with their values
     before = ((context.ending or {}).get("state") or {}).get("before")
-    state = read_json(context.resolve(before) / STATE_FILE) if before else None
+    if not before:
+        return ()
+    state = read_json(context.resolve(before) / STATE_FILE)
     if not isinstance(state, dict):
         return ()
     record = learning.record if learning is not None else {}

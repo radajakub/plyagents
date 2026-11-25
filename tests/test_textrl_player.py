@@ -333,6 +333,6 @@ def test_a_tabular_game_reads_back_as_estimates_picks_samples_and_its_tables(tmp
     [textrl] = [player for player in later.players.values() if player.key == "textrl"]
     actor, critic = textrl.memories
     filled = [entry for entry in actor.entries if entry.values]
-    assert filled and all(set(entry.values) == set(entry.actions) and entry.visits == sum(entry.actions.values()) for entry in filled)
+    assert filled and all(set(entry.values or {}) == set(entry.actions) and entry.visits == sum(entry.actions.values()) for entry in filled)
     assert any(entry.values and "V" in entry.values for entry in critic.entries)
     assert all(entry.written_at == entry.read_at for entry in actor.entries if entry.written_at)

@@ -25,6 +25,10 @@ def preset_spec(name: str) -> str:
     return _preset(name)["spec"]
 
 
+def preset_description(name: str) -> str:
+    return _preset(name)["description"]
+
+
 def preset_defines(name: str) -> dict[str, str]:
     # by role, the component config that defines the algorithm: its type, and the params it names (the others are open)
     return _preset(name)["defines"]
