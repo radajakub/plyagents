@@ -1260,7 +1260,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "plybench", extras = ["api", "viz", "store"], specifier = ">=5.2.0,<6" },
+    { name = "plybench", extras = ["api", "viz", "store"], specifier = ">=5.2.1,<6" },
     { name = "plyllm", specifier = ">=1.7.0,<2" },
 ]
 
@@ -1273,7 +1273,7 @@ dev = [
 
 [[package]]
 name = "plybench"
-version = "5.2.0"
+version = "5.2.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "clankers" },
@@ -1285,9 +1285,9 @@ dependencies = [
     { name = "scipy" },
     { name = "tqdm" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/16/fd/bfe1eb1966ee7baf86c2bea9eabe67164ae0ae997eca0aec7795f4931459/plybench-5.2.0.tar.gz", hash = "sha256:6502ba6678426fa84e01f97a5063410956dc55c3778e777b7b749e523cdf4d85", size = 438454, upload-time = "2026-11-22T13:47:47.238Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e1/67/9d64c34fd7f3ac81e87d86b2be881e23e5f02087d71265d4682a2c507687/plybench-5.2.1.tar.gz", hash = "sha256:861fbe0c8c5e55db844393d08eebff839e921e00c438b1ad12baa06cad9d182b", size = 438820, upload-time = "2026-11-27T18:04:37.566Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/92/45/5a310cf5d34bca317d3bd3a2531d4629f02dfeb415ef7652b78884eccaa0/plybench-5.2.0-py3-none-any.whl", hash = "sha256:2f2c06931d0c08605d5150121346eeeba1cd54e37b7bf3dfe7c1f23c2e64f9ce", size = 244581, upload-time = "2026-11-22T13:47:45.741Z" },
+    { url = "https://files.pythonhosted.org/packages/a0/d8/7def3aa294dff23f476a6eff749eed866ada7a25b7ce5193a83a9d390257/plybench-5.2.1-py3-none-any.whl", hash = "sha256:bb8e4f1119dd212e840cbf151cedcb47c6d209a9a11e5fb6eb1aada337a7df09", size = 244754, upload-time = "2026-11-27T18:04:36.097Z" },
 ]
 
 [package.optional-dependencies]
