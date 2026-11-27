@@ -163,6 +163,22 @@ def test_in_training_the_counts_the_request_and_the_instruction_follow_the_notes
     assert data["context"] == f"{LABEL}\ntake the centre" and data["guidance"].startswith("Tried here before:") and data["guidance"].endswith(EXPLORE[ExploreLevel.MEMORY])
 
 
+def test_a_free_instruction_follows_the_explore_text_in_training_only(tic_tac_toe):
+    line = "Press <C1R1> with probability 0.2."
+    for training in (True, False):
+        stub = _scripted()
+        actor = _actor(stub, explore=ExploreLevel.GENERIC)
+        actor.instruction = line
+        actor.initialize(tic_tac_toe.game, tic_tac_toe.prompt_adapter)
+        output = asyncio.run(actor.act(_situation(tic_tac_toe, training=training), Greedy(), np.random.default_rng(0)))
+        parts = (output.data or {})["guidance_parts"]
+        if training:
+            assert stub.prompts[0].index(EXPLORE[ExploreLevel.GENERIC]) < stub.prompts[0].index(line) < stub.prompts[0].index("legal moves are")
+            assert parts["instruction"] == line
+        else:
+            assert line not in stub.prompts[0] and parts["instruction"] is None
+
+
 def test_in_evaluation_only_the_statistics_are_shown(tic_tac_toe):
     for counts, shown in ((CountsLevel.COUNTS, False), (CountsLevel.REQUEST, False), (CountsLevel.STATS, True)):
         stub, reference = _scripted(), _scripted()

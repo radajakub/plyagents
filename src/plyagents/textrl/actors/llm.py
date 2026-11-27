@@ -146,6 +146,9 @@ class LLMActor(MemoryBlock, Actor[MemoryUpdate]):
         self.reads_memory = memory
         self.explore = explore
         self.counts = counts
+        # a free instruction line in training, after the explore text; not an option of the spec (its text would need quoting there): only a script
+        # that samples the actor sets it (sample_actor.py, the actor checks)
+        self.instruction: str | None = None
         self._adapter: PromptAdapter | None = None
         self._block_log = BasePathBuilder().llm_blocks_log()
 
@@ -163,13 +166,17 @@ class LLMActor(MemoryBlock, Actor[MemoryUpdate]):
         return [self.memory.read(key, "actor")] if self.reads_memory else None
 
     def guidance_parts(self, situation: Situation) -> dict[str, str | None]:
-        # each part the prompt adds after the notes, None where it adds none: the counts (stats also in evaluation), the request, the instruction
+        # each part the prompt adds after the notes, None where it adds none: the counts (stats also in evaluation), the request, the instruction; the
+        # free instruction only when set, so the records of the runs without it keep their parts
         shown = self.counts is CountsLevel.STATS or (situation.training and self.counts in (CountsLevel.COUNTS, CountsLevel.REQUEST))
-        return {
+        parts = {
             "counts": counts_text(situation.actions, situation.counts, self.counts is CountsLevel.STATS) if shown else None,
             "request": REQUEST if situation.training and self.counts is CountsLevel.REQUEST else None,
             "explore": EXPLORE[self.explore] if situation.training and self.explore is not ExploreLevel.OFF else None,
         }
+        if self.instruction is not None:
+            parts["instruction"] = self.instruction if situation.training else None
+        return parts
 
     def guidance(self, situation: Situation) -> str | None:
         # what the prompt adds after the notes, never part of the memory, in that order

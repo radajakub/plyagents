@@ -2,7 +2,8 @@
 the distributions of its actions.
 
 A cell is a state (a game and the OpenSpiel actions from its start, chance included), a memory (a checkpoint of the TextRL player, or none) and a level
-(the actor's options, e.g. `,explore=memory` or `,counts=request`, put into the config's actor spec). Every cell is sampled with the seeds 0..N-1,
+(the actor's options, e.g. `,explore=memory` or `,counts=request`, put into the config's actor spec; or {"options": "...", "instruction": "..."}, which
+also shows a free instruction line after the notes, in training). Every cell is sampled with the seeds 0..N-1,
 the same seeds in every cell, in training mode (the mode the instruction and the counts are shown in); a sample is one move of the player, as in a
 game seeded with that seed. The config (JSON):
 
@@ -69,6 +70,7 @@ class Cell:
     actions: tuple[int, ...]
     spec: str
     checkpoint: Path | None
+    instruction: str | None = None
 
     @property
     def name(self) -> str:
@@ -82,9 +84,11 @@ def read_cells(config: dict[str, Any]) -> list[Cell]:
         for memory, setup in spec["memories"].items():
             checkpoint = Path(setup["checkpoint"]) if setup.get("checkpoint") else None
             for level in setup["levels"]:
-                actor = config["actor"].replace("{options}", config["levels"][level])
+                value = config["levels"][level]
+                options, instruction = (value, None) if isinstance(value, str) else (value.get("options", ""), value["instruction"])
+                actor = config["actor"].replace("{options}", options)
                 player = f"textrl:actor={actor}" + (f",checkpoint={checkpoint}" if checkpoint is not None else "")
-                cells.append(Cell(state, memory, level, spec["game"], tuple(spec["actions"]), player, checkpoint))
+                cells.append(Cell(state, memory, level, spec["game"], tuple(spec["actions"]), player, checkpoint, instruction))
     return cells
 
 
@@ -101,6 +105,10 @@ def situation(op: PlyBench, cell: Cell, sample: int) -> tuple[TurnBasedEngine, T
     player = op.registry.build_player(engine.game, op.registry.player_config(cell.spec), "i")
     if not isinstance(player, TextRLPlayer):
         raise SystemExit(f"{cell.name}: {cell.spec} is not a TextRL player")
+    if cell.instruction is not None:
+        if not isinstance(player.actor, LLMActor):
+            raise SystemExit(f"{cell.name}: an instruction needs the LLM actor")
+        player.actor.instruction = cell.instruction
     player.seed(derive_seed(sample, player.identifier))
     player.set_mode(Mode.TRAIN)
     player.initialize_policy(engine.game, engine.prompt_adapter)
@@ -115,7 +123,15 @@ async def sample_once(op: PlyBench, cell: Cell, sample: int) -> dict[str, Any]:
     output = await player(engine.game, observation, legal)
     record = StepData.from_output(output, **(output.data or {})).to_dict()
     action = output.action.to_llm().string if output.action is not None else None
-    return {"cell": cell.name, "sample": sample, "spec": cell.spec, "legal": [move.to_llm().string for move in legal], "action": action, "step": record}
+    return {
+        "cell": cell.name,
+        "sample": sample,
+        "spec": cell.spec,
+        "instruction": cell.instruction,
+        "legal": [move.to_llm().string for move in legal],
+        "action": action,
+        "step": record,
+    }
 
 
 def problems_of(op: PlyBench, cell: Cell) -> list[str]:
