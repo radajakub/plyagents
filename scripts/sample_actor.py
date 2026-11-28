@@ -3,14 +3,20 @@ the distributions of its actions.
 
 A cell is a state (a game and the OpenSpiel actions from its start, chance included), a memory (a checkpoint of the TextRL player, or none) and a level
 (the actor's options, e.g. `,explore=memory` or `,counts=request`, put into the config's actor spec; or {"options": "...", "instruction": "..."}, which
-also shows a free instruction line after the notes, in training). Every cell is sampled with the seeds 0..N-1,
+also shows a free instruction line after the notes, in training; with "info": {"line": "...", "first": "..."} an information line follows it). Every cell is sampled with the seeds 0..N-1,
 the same seeds in every cell, in training mode (the mode the instruction and the counts are shown in); a sample is one move of the player, as in a
 game seeded with that seed. The config (JSON):
 
     {"samples": 100, "baseline": "I0", "actor": "llm[model=...{options}]", "levels": {"I0": "", "I1": ",explore=generic"},
      "states": {"<state>": {"game": "bandit:...", "actions": [], "memories": {"M0": {"checkpoint": null, "levels": ["I0", "I1"]}}}}}
 
-Each sample is saved as its own file, <out>/<state>_<memory>_<level>/sample_<i>.json (the action, the context and the guidance shown, the prompt,
+With "replicates": R in the config (default 1), every cell is sampled R times over, each replicate with its own seeds and in its own folder. Sample k
+of a replicate is game k + 1 of N. The information line is a template with {game}, {games} (N), {counts} (counts_text of the earlier presses of the
+replicate, no outcomes) and {history} (the earlier presses in order); "first" replaces it in game 1. A level whose line uses {counts} or {history} asks
+each replicate in order (the replicates in parallel), reading the earlier presses from the saved samples; a failed sample stops its replicate until the
+next run.
+
+Each sample is saved as its own file, <out>/<state>_<memory>_<level>/sample_<k>.json (replicate_<r>/sample_<k>.json with replicates) (the action, the context and the guidance shown, the prompt,
 the reasoning and the output), and a saved sample is not asked again, so a stopped run continues. A plyservice scripts job: --check --json prints
 the plan and its problems (a memory without an entry for the state's key, counts shown from a checkpoint without counts); --job-report <path> keeps a
 report (plybench.report) of the cells with samples left when it starts while it works, and the tables printed at the end are the same: per cell
@@ -49,7 +55,8 @@ from plybench.utils.seed import derive_seed
 from plyllm import LLM, LLMResponse, LLMTokens
 from plyllm.response import OutputText
 
-from plyagents.textrl.actors.llm import LLMActor
+from plyagents.textrl.actors.llm import LLMActor, counts_text
+from plyagents.textrl.model.counts import MoveCounts
 from plyagents.textrl.player import TextRLPlayer
 from plyagents.textrl.register import register_players
 
@@ -71,10 +78,17 @@ class Cell:
     spec: str
     checkpoint: Path | None
     instruction: str | None = None
+    # the information line after the instruction and its text in game 1 (None: the line)
+    info: tuple[str, str | None] | None = None
 
     @property
     def name(self) -> str:
         return f"{self.state}_{self.memory}_{self.level}"
+
+    @property
+    def sequential(self) -> bool:
+        # the line shows the earlier presses, so a sample waits for the one before it
+        return self.info is not None and any(f"{{{name}}}" in text for text in self.info if text is not None for name in ("counts", "history"))
 
 
 def read_cells(config: dict[str, Any]) -> list[Cell]:
@@ -86,18 +100,63 @@ def read_cells(config: dict[str, Any]) -> list[Cell]:
             for level in setup["levels"]:
                 value = config["levels"][level]
                 options, instruction = (value, None) if isinstance(value, str) else (value.get("options", ""), value["instruction"])
+                info = value.get("info") if isinstance(value, dict) else None
                 actor = config["actor"].replace("{options}", options)
                 player = f"textrl:actor={actor}" + (f",checkpoint={checkpoint}" if checkpoint is not None else "")
-                cells.append(Cell(state, memory, level, spec["game"], tuple(spec["actions"]), player, checkpoint, instruction))
+                line = (info["line"], info.get("first")) if info is not None else None
+                cells.append(Cell(state, memory, level, spec["game"], tuple(spec["actions"]), player, checkpoint, instruction, line))
     return cells
 
 
-def sample_path(out: Path, cell: Cell, sample: int) -> Path:
-    return out / cell.name / f"sample_{sample}.json"
+@dataclass(frozen=True)
+class Draw:
+    # one sample to ask: sample k (game k + 1) of a replicate, out of `samples` per replicate; `replicates` > 1 gives each replicate a folder
+    replicate: int
+    sample: int
+    samples: int
+    replicates: int = 1
+
+    @property
+    def game(self) -> int:
+        return self.sample + 1
+
+    @property
+    def seed_index(self) -> int:
+        # replicate 0 has the seeds 0..N-1 of a run without replicates, every later replicate the next N
+        return self.replicate * self.samples + self.sample
+
+    def at(self, sample: int) -> Draw:
+        return Draw(self.replicate, sample, self.samples, self.replicates)
 
 
-def situation(op: PlyBench, cell: Cell, sample: int) -> tuple[TurnBasedEngine, TextRLPlayer, InterfaceObservation, list[InterfaceAction]]:
-    # the cell's state and a fresh player, as a game seeded with `sample` would have them at this move: seeded, in training mode, its memory restored
+def sample_path(out: Path, cell: Cell, draw: Draw) -> Path:
+    folder = out / cell.name / (f"replicate_{draw.replicate}" if draw.replicates > 1 else "")
+    return folder / f"sample_{draw.sample}.json"
+
+
+def earlier_presses(out: Path, cell: Cell, draw: Draw) -> list[str]:
+    # the actions of the saved samples before this one in its replicate, in order; a failed move (no action) is left out, as no button was pressed
+    if not cell.sequential:
+        return []
+    actions = [json.loads(sample_path(out, cell, draw.at(k)).read_text())["action"] for k in range(draw.sample)]
+    return [action for action in actions if action is not None]
+
+
+def info_line(cell: Cell, draw: Draw, earlier: list[str], legal: list[str]) -> str | None:
+    # the cell's information line for this sample: its game and the earlier presses of the replicate (as counts, without outcomes: stats off)
+    if cell.info is None:
+        return None
+    line, first = cell.info
+    counts = {action: MoveCounts({"draw": count}) for action, count in Counter(earlier).items()}
+    template = first if draw.game == 1 and first is not None else line
+    return template.format(game=draw.game, games=draw.samples, counts=counts_text(legal, counts, False), history=", ".join(earlier))
+
+
+def situation(
+    op: PlyBench, cell: Cell, draw: Draw, earlier: list[str] | None = None
+) -> tuple[TurnBasedEngine, TextRLPlayer, InterfaceObservation, list[InterfaceAction], str | None]:
+    # the cell's state and a fresh player, as a game seeded with the draw's seed index would have them at this move: seeded, in training mode, its memory restored;
+    # the instruction followed by the information line, built from the earlier presses of the replicate
     engine = op.registry.build_engine(op.registry.game_config(cell.game))
     engine.reset()
     for action in cell.actions:
@@ -105,29 +164,33 @@ def situation(op: PlyBench, cell: Cell, sample: int) -> tuple[TurnBasedEngine, T
     player = op.registry.build_player(engine.game, op.registry.player_config(cell.spec), "i")
     if not isinstance(player, TextRLPlayer):
         raise SystemExit(f"{cell.name}: {cell.spec} is not a TextRL player")
-    if cell.instruction is not None:
-        if not isinstance(player.actor, LLMActor):
-            raise SystemExit(f"{cell.name}: an instruction needs the LLM actor")
-        player.actor.instruction = cell.instruction
-    player.seed(derive_seed(sample, player.identifier))
+    if cell.instruction is not None and not isinstance(player.actor, LLMActor):
+        raise SystemExit(f"{cell.name}: an instruction needs the LLM actor")
+    player.seed(derive_seed(draw.seed_index, player.identifier))
     player.set_mode(Mode.TRAIN)
     player.initialize_policy(engine.game, engine.prompt_adapter)
     pid = engine.game.get_player()
     observation = engine.observation_class.from_openspiel(engine.game.get_observation(pid), engine.interface_transformer)
     legal = [engine.action_class.from_openspiel(move, engine.interface_transformer) for move in engine.game.get_legal_moves(pid)]
-    return engine, player, observation, legal
+    info = info_line(cell, draw, earlier or [], [move.to_llm().string for move in legal])
+    if cell.instruction is not None and isinstance(player.actor, LLMActor):
+        player.actor.instruction = cell.instruction + (f"\n{info}" if info is not None else "")
+    return engine, player, observation, legal, info
 
 
-async def sample_once(op: PlyBench, cell: Cell, sample: int) -> dict[str, Any]:
-    engine, player, observation, legal = situation(op, cell, sample)
+async def sample_once(op: PlyBench, cell: Cell, draw: Draw, earlier: list[str] | None = None) -> dict[str, Any]:
+    engine, player, observation, legal, info = situation(op, cell, draw, earlier)
     output = await player(engine.game, observation, legal)
     record = StepData.from_output(output, **(output.data or {})).to_dict()
     action = output.action.to_llm().string if output.action is not None else None
     return {
         "cell": cell.name,
-        "sample": sample,
+        "sample": draw.sample,
+        "replicate": draw.replicate,
         "spec": cell.spec,
         "instruction": cell.instruction,
+        "game": draw.game,
+        "info": info,
         "legal": [move.to_llm().string for move in legal],
         "action": action,
         "step": record,
@@ -139,7 +202,7 @@ def problems_of(op: PlyBench, cell: Cell) -> list[str]:
     if cell.checkpoint is not None and not (cell.checkpoint / "state.json").exists():
         return [f"{cell.name}: no checkpoint at {cell.checkpoint}"]
     try:
-        _, player, observation, _ = situation(op, cell, 0)
+        _, player, observation, _, _ = situation(op, cell, Draw(0, 0, 1))
     except (ValueError, TypeError) as error:
         return [f"{cell.name}: {type(error).__name__}: {error}"]
     key, problems = player.key(observation), []
@@ -207,7 +270,7 @@ def compare(actions: list[str], baseline: list[str]) -> dict[str, float]:
 def status(cells: list[Cell], out: Path, baseline: str) -> dict[str, Any]:
     saved: dict[str, list[str]] = {}
     for cell in cells:
-        files = sorted((out / cell.name).glob("sample_*.json"))
+        files = sorted((out / cell.name).glob("**/sample_*.json"))
         saved[cell.name] = [json.loads(path.read_text())["action"] or FAIL for path in files]
     tables = []
     for cell in cells:
@@ -275,9 +338,9 @@ async def main() -> None:
     cells = [cell for cell in read_cells(config) if args.cells is None or cell.name in args.cells]
 
     op = build_op(concurrency=args.concurrency)
-    samples = range(int(config["samples"]))
-    planned = [(cell, sample) for cell in cells for sample in samples]
-    left = [(cell, sample) for cell, sample in planned if not sample_path(args.out, cell, sample).exists()]
+    samples, replicates = int(config["samples"]), int(config.get("replicates", 1))
+    planned = [(cell, Draw(r, k, samples, replicates)) for cell in cells for r in range(replicates) for k in range(samples)]
+    left = [(cell, draw) for cell, draw in planned if not sample_path(args.out, cell, draw).exists()]
 
     if args.check:
         problems = [problem for cell in cells for problem in problems_of(op, cell)]
@@ -294,7 +357,11 @@ async def main() -> None:
         echo = _EchoLLM()
         register_players(op.registry, cast(LLM, echo))
         for cell in cells:
-            await sample_once(op, cell, 0)
+            # a sequential cell: games 1 to 3 of the first replicate, the earlier presses those of the echo, and the prompt of game 3
+            earlier: list[str] = []
+            for sample in range(3 if cell.sequential else 1):
+                action = (await sample_once(op, cell, Draw(0, sample, samples, replicates), earlier))["action"]
+                earlier.append(action)
             print(f"\n== {cell.name}\n{echo.prompts[-1]}")
         return
 
@@ -302,30 +369,46 @@ async def main() -> None:
     done, failed = len(planned) - len(left), 0
     # the report's items: the cells with samples left now; its tables cost a bootstrap per cell, so it is written at most every REPORT_INTERVAL seconds
     open_cells = [cell for cell in cells if any(other is cell for other, _ in left)]
-    report_file = ReportFile(args.job_report, lambda: report(open_cells, args.out, config["baseline"], len(samples)), REPORT_INTERVAL) if args.job_report is not None else None
+    report_file = (
+        ReportFile(args.job_report, lambda: report(open_cells, args.out, config["baseline"], samples * replicates), REPORT_INTERVAL) if args.job_report is not None else None
+    )
     if report_file is not None:
         report_file.write()
 
-    async def one(cell: Cell, sample: int) -> None:
+    async def one(cell: Cell, draw: Draw) -> bool:
         nonlocal done, failed
         try:
-            saved = await sample_once(op, cell, sample)
+            saved = await sample_once(op, cell, draw, earlier_presses(args.out, cell, draw))
         except Exception as error:
             # left unsaved, so a run again asks it again; the run ends with an error once the others are done
             failed += 1
-            print(f"warning: {cell.name}, sample {sample}: {type(error).__name__}: {error}", flush=True)
-            return
-        path = sample_path(args.out, cell, sample)
+            print(f"warning: {cell.name}, replicate {draw.replicate}, sample {draw.sample}: {type(error).__name__}: {error}", flush=True)
+            return False
+        path = sample_path(args.out, cell, draw)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(saved, indent=1))
         done += 1
         print(f"progress: {done}/{len(planned)}", flush=True)
         if report_file is not None:
             report_file.changed()
+        return True
+
+    async def in_order(cell: Cell, draws: list[Draw]) -> None:
+        # the samples of one replicate in order; a failure stops it, as the later games would see a history with a gap
+        for draw in draws:
+            if not await one(cell, draw):
+                return
+
+    chains: dict[tuple[Cell, int], list[Draw]] = {}
+    for cell, draw in left:
+        if cell.sequential:
+            chains.setdefault((cell, draw.replicate), []).append(draw)
+    tasks = [one(cell, draw) for cell, draw in left if not cell.sequential]
+    tasks += [in_order(cell, draws) for (cell, _), draws in chains.items()]
 
     completed = False
     try:
-        await asyncio.gather(*(one(cell, sample) for cell, sample in left))
+        await asyncio.gather(*tasks)
         completed = True
     finally:
         if report_file is not None:
